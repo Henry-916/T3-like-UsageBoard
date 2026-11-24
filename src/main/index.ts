@@ -53,6 +53,14 @@ function createPanel(): void {
     }
   })
   window.on('closed', () => { panel = undefined })
+  const sendMaximized = () => {
+    if (window.isDestroyed() || window.webContents.isDestroyed()) return
+    window.webContents.send(usageChannels.maximizedChanged, window.isMaximized() || window.isFullScreen())
+  }
+  window.on('maximize', sendMaximized)
+  window.on('unmaximize', sendMaximized)
+  window.on('enter-full-screen', sendMaximized)
+  window.on('leave-full-screen', sendMaximized)
   if (!process.argv.includes('--auto-launch')) window.once('ready-to-show', showPanel)
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-frame-navigate', (event) => event.preventDefault())

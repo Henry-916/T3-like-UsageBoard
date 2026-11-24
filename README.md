@@ -9,7 +9,7 @@ pnpm install
 pnpm dev
 ```
 
-关闭按钮会把窗口隐藏到托盘。单击托盘图标切换显隐；要结束进程，请使用托盘右键菜单的「退出」。
+关闭按钮会把窗口隐藏到托盘，右上角支持最小化、最大化/还原及关闭隐藏到托盘。单击托盘图标切换显隐；要结束进程，请使用托盘右键菜单的「退出」。
 
 快捷键：`C` / `T` / `L` 切页，`Ctrl+Shift+1` 至 `4` 切时间范围，`R` 刷新，`Esc` 关闭弹层或隐藏窗口。右键托盘可开启「开机自启」，下次登录 Windows 时应用会在托盘启动。
 
@@ -41,4 +41,4 @@ pnpm exec vitest run tests/usageService.test.ts
 Remove-Item Env:USAGE_SMOKE_SUMMARY
 ```
 
-许可见 [LICENSE](LICENSE) 和 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。完整开发范围见 [SPEC.md](SPEC.md)。
+许可见 [LICENSE](LICENSE) 和 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。当前架构与规范索引见 [docs/CURRENT.md](docs/CURRENT.md)，历次迭代工单归档于 `docs/specs/`。

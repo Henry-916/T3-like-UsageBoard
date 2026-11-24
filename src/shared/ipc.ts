@@ -3,6 +3,9 @@ import type { AccountChanges, AccountsReport, AddManualAccount, ConsumeResetCred
 
 export const usageChannels = {
   minimize: 'usage:window-minimize',
+  toggleMaximize: 'usage:window-toggle-maximize',
+  isMaximized: 'usage:window-is-maximized',
+  maximizedChanged: 'usage:window-maximized-changed',
   hide: 'usage:window-hide',
   refreshRequested: 'usage:refresh-requested',
   summary: 'usage:get-summary',
@@ -23,6 +26,9 @@ export const usageChannels = {
 
 export interface UsageApi {
   minimize(): Promise<void>
+  toggleMaximize(): Promise<boolean>
+  isMaximized(): Promise<boolean>
+  onMaximizedChanged(listener: (maximized: boolean) => void): () => void
   hide(): Promise<void>
   getSummary(query: UsageSummaryInput, refresh?: boolean): Promise<UsageSummary>
   getPricingSettings(): Promise<PricingSettings>

@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { expect, test, vi } from 'vitest'
 import { createUsageService } from '../src/main/usage/service'
 import { readConfig, writeConfig } from '../src/main/configStore'
+import { discoverAccounts } from '../src/main/accounts/discovery'
 
 test('scans a shared root once, caches unchanged files, and retains auto-pruned history', async () => {
   const home = await mkdtemp(join(tmpdir(), 'usage-service-'))
@@ -116,6 +117,45 @@ test('scans a directly selected Antigravity conversations directory and keeps an
     expect(cached.buckets).toEqual(first.buckets)
     const withNative = await createUsageService({ ...options, env: { ...options.env, ANTIGRAVITY_DATA_DIR: profile } }).getSummary(query)
     expect(withNative.buckets.find(bucket => bucket.provider === 'antigravity')?.records).toBe(1)
+  } finally {
+    fetchMock.mockRestore()
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test('scans disabled native Antigravity history but skips disabled manual directories', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'usage-disabled-'))
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'))
+  try {
+    const userData = join(home, 'app')
+    const native = join(home, '.gemini', 'antigravity')
+    const manual = join(home, 'manual')
+    for (const dir of [native, manual]) {
+      const conversations = join(dir, 'conversations')
+      await mkdir(conversations, { recursive: true })
+      const db = new DatabaseSync(join(conversations, `${dir === native ? 'native' : 'manual'}.db`))
+      try {
+        db.exec('CREATE TABLE gen_metadata (idx INTEGER, data BLOB)')
+        db.prepare('INSERT INTO gen_metadata VALUES (?, ?)').run(1, Buffer.from(
+          dir === native ? '0a0718af082202100f' : '0a0718af082202101e', 'hex'
+        ))
+      } finally { db.close() }
+    }
+    const config = await readConfig(userData)
+    config.scanT3 = false
+    config.accounts = [{ id: 'manual', provider: 'antigravity', displayName: 'Manual', dataDir: manual }]
+    const options = { home, env: {}, userData, fallbackRates: resolve('resources/fallback-rates.json') }
+    const discovered = await discoverAccounts(config, options)
+    const nativeAccount = discovered.find(account => account.provider === 'antigravity' && account.origin === 'native')!
+    config.accountPreferences = { [nativeAccount.id]: { enabled: false }, manual: { enabled: false } }
+    await writeConfig(userData, config)
+    const day = new Date().toISOString().slice(0, 10)
+    const summary = await createUsageService(options).getSummary({ sinceDay: day, untilDay: day, timeZone: 'UTC' })
+    expect(summary.sources.find(source => source.provider === 'antigravity')).toMatchObject({ scannedFiles: 1 })
+    expect(summary.buckets).toHaveLength(1)
+    expect(summary.buckets[0]).toMatchObject({
+      provider: 'antigravity', records: 1, totals: { uncachedInputTokens: 15 }
+    })
   } finally {
     fetchMock.mockRestore()
     await rm(home, { recursive: true, force: true })

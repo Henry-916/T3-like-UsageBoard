@@ -25,6 +25,17 @@ export function registerIpc(
   }
 
   ipcMain.handle(usageChannels.minimize, (event) => ownWindow(event).minimize())
+  ipcMain.handle(usageChannels.isMaximized, event => {
+    const window = ownWindow(event)
+    return window.isMaximized() || window.isFullScreen()
+  })
+  ipcMain.handle(usageChannels.toggleMaximize, event => {
+    const window = ownWindow(event)
+    if (window.isFullScreen()) window.setFullScreen(false)
+    else if (window.isMaximized()) window.unmaximize()
+    else window.maximize()
+    return window.isMaximized() || window.isFullScreen()
+  })
   ipcMain.handle(usageChannels.hide, (event) => ownWindow(event).close())
   ipcMain.handle(usageChannels.summary, (event, input: unknown, refresh: unknown) => {
     ownWindow(event)

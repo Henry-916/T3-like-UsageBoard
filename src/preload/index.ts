@@ -5,6 +5,13 @@ import type { LimitsReport } from '../shared/limitsTypes'
 
 const usageApi: UsageApi = {
   minimize: () => ipcRenderer.invoke(usageChannels.minimize),
+  toggleMaximize: () => ipcRenderer.invoke(usageChannels.toggleMaximize),
+  isMaximized: () => ipcRenderer.invoke(usageChannels.isMaximized),
+  onMaximizedChanged(listener) {
+    const handler = (_event: unknown, maximized: boolean) => listener(maximized)
+    ipcRenderer.on(usageChannels.maximizedChanged, handler)
+    return () => ipcRenderer.removeListener(usageChannels.maximizedChanged, handler)
+  },
   hide: () => ipcRenderer.invoke(usageChannels.hide),
   getSummary: (query, refresh) => ipcRenderer.invoke(usageChannels.summary, query, refresh),
   getPricingSettings: () => ipcRenderer.invoke(usageChannels.pricingSettings),

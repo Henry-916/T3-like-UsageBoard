@@ -93,7 +93,7 @@ export function poolUsageLimits(
     }
   }
 
-  return [...groups.values()].map(({ windowId, members }): PooledLimitWindow => {
+  const pools = [...groups.values()].map(({ windowId, members }): PooledLimitWindow => {
     const first = members[0]
     const share = 1 / members.length
     let meanRemainingPercent = 0
@@ -153,4 +153,18 @@ export function poolUsageLimits(
       } : undefined
     }
   }).sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind])
+  const isAntigravity = (pool: PooledLimitWindow) => pool.provider === 'antigravity'
+  const firstAntigravity = pools.findIndex(isAntigravity)
+  if (firstAntigravity === -1) return pools
+
+  const family = (id: string) => id.replace(/-(?:5h|weekly|quota)$/, '')
+  const antigravity = pools.filter(isAntigravity).sort((a, b) =>
+    Number(!a.windowId.startsWith('gemini-')) - Number(!b.windowId.startsWith('gemini-')) ||
+    family(a.windowId).localeCompare(family(b.windowId)) ||
+    KIND_ORDER[a.kind] - KIND_ORDER[b.kind]
+  )
+  // Keep the first Antigravity position and the relative order of all other providers.
+  const ordered = pools.filter((pool) => !isAntigravity(pool))
+  ordered.splice(firstAntigravity, 0, ...antigravity)
+  return ordered
 }

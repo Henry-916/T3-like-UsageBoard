@@ -104,7 +104,7 @@ export function createUsageService({ userData, fallbackRates, home, env, now = D
     for (const provider of providers) {
       const roots = new Map<string, { dir: string; allowDirect: boolean }>()
       for (const account of accounts) {
-        if (!account.enabled || account.provider !== provider || !account.dataDir) continue
+        if ((account.origin === 'manual' && !account.enabled) || account.provider !== provider || !account.dataDir) continue
         const dir = await realpath(account.dataDir).catch(() => account.dataDir!)
         const key = pathKey(dir)
         roots.set(key, { dir, allowDirect: account.origin === 'manual' || roots.get(key)?.allowDirect === true })

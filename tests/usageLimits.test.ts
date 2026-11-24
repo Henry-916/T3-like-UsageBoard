@@ -16,6 +16,35 @@ function account(id: string, usedPercent: number, resetsAt?: string): LimitAccou
 }
 
 describe('poolUsageLimits', () => {
+  it.each([
+    {
+      ids: ['gemini-5h', '3p-5h', 'gemini-weekly', '3p-weekly'],
+      expected: ['gemini-5h', 'gemini-weekly', '3p-5h', '3p-weekly']
+    },
+    {
+      ids: ['3p-weekly', 'gemini-carbon-weekly', 'gemini-argon-5h', '3p-5h', 'gemini-argon-weekly', 'gemini-carbon-5h'],
+      expected: ['gemini-argon-5h', 'gemini-argon-weekly', 'gemini-carbon-5h', 'gemini-carbon-weekly', '3p-5h', '3p-weekly']
+    }
+  ])('groups Antigravity windows by family for $ids', ({ ids, expected }) => {
+    const reading = account('a', 0)
+    reading.windows = ids.map(id => ({
+      id, label: id, kind: id.endsWith('-5h') ? 'session' : 'weekly', usedPercent: 0
+    }))
+    expect(poolUsageLimits([reading], nowMs).map(pool => pool.windowId)).toEqual(expected)
+  })
+
+  it('keeps Antigravity families together without reordering other providers', () => {
+    const antigravity = account('a', 0)
+    antigravity.windows.push({ id: 'gemini-weekly', kind: 'weekly', label: 'Weekly', usedPercent: 0 })
+    const claude = { ...account('b', 0), provider: 'claude' as const }
+    claude.windows[0].id = 'claude-session'
+    const opencode = { ...account('c', 0), provider: 'opencode' as const }
+    opencode.windows[0] = { id: 'opencode-weekly', kind: 'weekly', label: 'Weekly', usedPercent: 0 }
+    expect(poolUsageLimits([opencode, antigravity, claude], nowMs).map(pool => pool.windowId)).toEqual([
+      'gemini-5h', 'gemini-weekly', 'claude-session', 'opencode-weekly'
+    ])
+  })
+
   it('coalesces the next reset shares across three accounts without including later resets', () => {
     const [pool] = poolUsageLimits([
       account('c', 15, lastReset),

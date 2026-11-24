@@ -27,16 +27,49 @@ function App() {
   const hiddenProviderSet = useMemo(() => new Set(hiddenProviders), [hiddenProviders])
   const [modal, setModal] = useState<Modal | null>(null)
   const [windowError, setWindowError] = useState('')
+  const [maximized, setMaximized] = useState(false)
+  const maximizedRevision = useRef(0)
   const { summary, query, pending, refreshing, failed, refresh, reprice } = useUsageData(range)
   const limits = useLimitsData()
   const activeRefreshing = view === 'limits' ? limits.refreshing : refreshing
   const refreshActive = view === 'limits' ? limits.refresh : refresh
   const seenModels = useMemo(() => [...new Set(summary?.buckets.map((bucket) => bucket.model))], [summary])
 
-  const runWindowAction = useCallback(async (action: 'minimize' | 'hide') => {
+  const runWindowAction = useCallback(async (action: 'minimize' | 'toggleMaximize' | 'hide') => {
     setWindowError('')
-    try { await window.usageApi[action]() } catch {
-      setWindowError(action === 'minimize' ? '无法最小化窗口。' : '无法将窗口隐藏到托盘。')
+    try {
+      if (action === 'toggleMaximize') {
+        const revision = ++maximizedRevision.current
+        const next = await window.usageApi.toggleMaximize()
+        if (revision === maximizedRevision.current) setMaximized(next)
+      } else {
+        await window.usageApi[action]()
+      }
+    } catch {
+      const messages = {
+        minimize: '无法最小化窗口。',
+        toggleMaximize: '无法切换窗口最大化状态。',
+        hide: '无法将窗口隐藏到托盘。'
+      }
+      setWindowError(messages[action])
+    }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    const revision = maximizedRevision.current
+    // Native changes supersede any in-flight window state query or action response.
+    const unsubscribe = window.usageApi?.onMaximizedChanged?.((next) => {
+      if (!active) return
+      maximizedRevision.current++
+      setMaximized(next)
+    })
+    void window.usageApi?.isMaximized?.().then((next) => {
+      if (active && revision === maximizedRevision.current) setMaximized(next)
+    }).catch(() => undefined)
+    return () => {
+      active = false
+      unsubscribe?.()
     }
   }, [])
 
@@ -105,7 +138,7 @@ function App() {
   const metric = view === 'tokens' ? 'tokens' : 'cost'
   return (
     <div className="app-shell">
-      <TopBar hiddenProviders={hiddenProviders} range={range} view={view} refreshing={activeRefreshing}
+      <TopBar hiddenProviders={hiddenProviders} range={range} view={view} refreshing={activeRefreshing} maximized={maximized}
         onHiddenProviders={selectHiddenProviders} onRange={selectRange} onView={selectView} onRefresh={refreshActive}
         onPrices={() => setModal({ kind: 'prices' })} onAccounts={() => setModal({ kind: 'accounts' })}
         onWindow={(action) => void runWindowAction(action)} />

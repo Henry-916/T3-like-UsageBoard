@@ -45,15 +45,15 @@ function placePopover(panel: HTMLDivElement | null, trigger: HTMLButtonElement |
   panel.style.top = `${Math.max(edge, Math.min(top, window.innerHeight - height - edge))}px`
 }
 
-export function TopBar({ hiddenProviders, range, view, refreshing, onHiddenProviders, onRange, onView, onRefresh, onPrices, onAccounts, onWindow }: {
-  hiddenProviders: readonly UsageProviderKind[]; range: UsageRange; view: UsageView; refreshing: boolean
+export function TopBar({ hiddenProviders, range, view, refreshing, maximized, onHiddenProviders, onRange, onView, onRefresh, onPrices, onAccounts, onWindow }: {
+  hiddenProviders: readonly UsageProviderKind[]; range: UsageRange; view: UsageView; refreshing: boolean; maximized: boolean
   onHiddenProviders: (providers: UsageProviderKind[]) => void
   onRange: (range: UsageRange) => void
   onView: (view: UsageView) => void
   onRefresh: () => void
   onPrices: () => void
   onAccounts: () => void
-  onWindow: (action: 'minimize' | 'hide') => void
+  onWindow: (action: 'minimize' | 'toggleMaximize' | 'hide') => void
 }) {
   const settingsPanel = useRef<HTMLDivElement>(null)
   const settingsTrigger = useRef<HTMLButtonElement>(null)
@@ -69,6 +69,7 @@ export function TopBar({ hiddenProviders, range, view, refreshing, onHiddenProvi
     : visible.length === 1 ? providerInfo[visible[0]].label
     : `${visible.length} 个提供方`
   const refreshLabel = view === 'limits' ? '刷新额度' : '刷新用量'
+  const maximizeLabel = maximized ? '向下还原' : '最大化'
 
   useEffect(() => {
     if (CSS.supports('position-area: block-end span-inline-end')) return
@@ -190,6 +191,17 @@ export function TopBar({ hiddenProviders, range, view, refreshing, onHiddenProvi
           <div className="window-controls">
             <button type="button" className="icon-button" aria-label="最小化" title="最小化" onClick={() => onWindow('minimize')}>
               <Minus size={15} strokeWidth={1.5} aria-hidden="true" />
+            </button>
+            <button type="button" className="icon-button" aria-label={maximizeLabel} title={maximizeLabel}
+              onClick={() => onWindow('toggleMaximize')}>
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true" stroke="currentColor" strokeWidth="1.4">
+                {maximized ? (
+                  <>
+                    <rect x="2.5" y="4.75" width="8.75" height="8.75" rx="1.4" />
+                    <path d="M5.25 4.75V3.9A1.4 1.4 0 0 1 6.65 2.5h5.45A1.4 1.4 0 0 1 13.5 3.9v5.45a1.4 1.4 0 0 1-1.4 1.4h-.85" />
+                  </>
+                ) : <rect x="2.75" y="2.75" width="10.5" height="10.5" rx="1.5" />}
+              </svg>
             </button>
             <button type="button" className="icon-button close-window" aria-label="关闭到托盘" title="关闭到托盘" onClick={() => onWindow('hide')}>
               <X size={15} strokeWidth={1.5} aria-hidden="true" />
