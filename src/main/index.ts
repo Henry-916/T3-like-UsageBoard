@@ -13,6 +13,7 @@ import { createAntigravityTokenCache } from './limits/antigravityTokenCache'
 import { readConfig } from './configStore'
 import { probeClaude } from './limits/probes/claude'
 import { probeCodex } from './limits/probes/codex'
+import { createCodexResetCreditConsumer } from './limits/codexResetCredit'
 import { probeOpenCode } from './limits/probes/opencode'
 
 let panel: BrowserWindow | undefined
@@ -35,7 +36,7 @@ function createPanel(): void {
     minHeight: 520,
     show: false,
     frame: false,
-    backgroundColor: '#09090b',
+    backgroundColor: '#000000',
     icon: trayIconPath,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -102,6 +103,7 @@ if (!app.requestSingleInstanceLock()) {
     })
     const limits = createLimitsService({
       userData,
+      consumeCodexCredit: createCodexResetCreditConsumer(),
       discover: accounts.listInternal,
       readCredential: accounts.readCredential,
       getManualApiKey: accounts.getManualApiKey,

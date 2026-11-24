@@ -7,6 +7,40 @@ const BASE = 'https://chatgpt.com/backend-api/wham'
 const WEEK = 7 * 24 * 60
 const MONTH = 30 * 24 * 60
 
+const PLANS = new Map([
+  ['free', 'Free'], ['go', 'Go'], ['plus', 'Plus'], ['pro', 'Pro 200'],
+  ['prolite', 'Pro 100'], ['promax', 'Pro 500'], ['self_serve_business_prolite', 'Business Premium'],
+  ['team', 'Business'], ['self_serve_business_usage_based', 'Business'], ['business', 'Business'],
+  ['ent26', 'Enterprise'], ['enterprise_cbp_automation', 'Enterprise'],
+  ['enterprise_cbp_usage_based', 'Enterprise'], ['enterprise', 'Enterprise'],
+  ['edu', 'Edu'], ['edu_plus', 'Edu'], ['edu_pro', 'Edu']
+])
+
+export function codexPlanLabel(planType: string | undefined): string | undefined {
+  if (!planType?.trim()) return
+  if (planType === 'unknown') return 'ChatGPT Subscription'
+  const name = PLANS.get(planType)
+  return name ? `ChatGPT ${name} Subscription` : planType
+}
+
+export const CODEX_CREDITS_URL = `${BASE}/rate-limit-reset-credits`
+
+export function codexResetCredits(value: unknown, cli: boolean) {
+  if (!Array.isArray(value)) return
+  const now = Date.now()
+  const available = value.flatMap(raw => {
+    const credit = record(raw)
+    if (credit?.status !== 'available' ||
+        credit[cli ? 'resetType' : 'reset_type'] !== (cli ? 'codexRateLimits' : 'codex_rate_limits')) return []
+    const expires = cli ? (number(credit.expiresAt) ?? 0) * 1000 : Date.parse(text(credit.expires_at) ?? '')
+    return expires > now && iso(expires) ? [{ expires, id: text(credit.id) }] : []
+  }).sort((a, b) => a.expires - b.expires)
+  const first = available[0]
+  return { resetCredits: available.length,
+    ...(first ? { resetCreditsExpiresAt: iso(first.expires) } : {}),
+    ...(first?.id ? { nextResetCreditId: first.id } : {}) }
+}
+
 function epoch(value: unknown): string | undefined {
   const seconds = number(value)
   if (seconds !== undefined && seconds > 0) return iso(seconds * 1000)
@@ -39,18 +73,11 @@ function windowsFrom(snapshot: Record<string, unknown>, plan: string | undefined
   return windows
 }
 
-async function readCredits(ctx: LimitsProbeContext, request: RequestInit): Promise<number | undefined> {
+async function readCredits(ctx: LimitsProbeContext, request: RequestInit) {
   try {
-    const response = await ctx.fetch(`${BASE}/rate-limit-reset-credits`, request)
+    const response = await ctx.fetch(CODEX_CREDITS_URL, request)
     if (!response.ok) { await response.body?.cancel(); return }
-    const credits = record(await response.json())?.credits
-    if (!Array.isArray(credits)) return
-    const now = Date.now()
-    return credits.filter(value => {
-      const credit = record(value)
-      return credit?.reset_type === 'codex_rate_limits' && credit.status === 'available' &&
-        Date.parse(text(credit.expires_at) ?? '') > now
-    }).length
+    return codexResetCredits(record(await response.json())?.credits, false)
   } catch { return undefined }
 }
 
@@ -86,14 +113,10 @@ async function fromCli(
       const hash = fingerprint(text(result.accountId) ?? accountId)
       const summary = record(result.rateLimitResetCredits)
       const advertised = number(summary?.availableCount)
-      const now = Date.now() / 1000
-      const resetCredits = Array.isArray(summary?.credits) ? summary.credits.filter(value => {
-        const credit = record(value)
-        return credit?.resetType === 'codexRateLimits' && credit.status === 'available' &&
-          (number(credit.expiresAt) ?? 0) > now
-      }).length : advertised !== undefined ? Math.max(0, Math.floor(advertised)) : undefined
-      return { kind: 'ok', windows, ...(plan ? { plan } : {}), ...(hash ? { fingerprint: hash } : {}),
-        ...(resetCredits !== undefined ? { resetCredits } : {}) }
+      const credits = codexResetCredits(summary?.credits ?? result.rateLimitResetCredits, true)
+      const label = codexPlanLabel(plan)
+      return { kind: 'ok', windows, ...(label ? { plan: label } : {}), ...(hash ? { fingerprint: hash } : {}),
+        ...(credits ?? (advertised !== undefined ? { resetCredits: Math.max(0, Math.floor(advertised)) } : {})) }
     }
   ) ?? { kind: 'failed' }
 }
@@ -129,10 +152,10 @@ export async function probeCodex(account: DiscoveredAccount, ctx: LimitsProbeCon
       if (!windows.length) return snapshot.primary_window != null || snapshot.secondary_window != null
         ? { kind: 'failed' } : { kind: 'unsupported' }
       const hash = fingerprint(accountId ?? text(usage.account_id))
-      const resetCredits = await readCredits(ctx, request)
+      const credits = await readCredits(ctx, request)
+      const label = codexPlanLabel(plan)
       ctx.signal.throwIfAborted()
-      return { kind: 'ok', windows, ...(plan ? { plan } : {}), ...(hash ? { fingerprint: hash } : {}),
-        ...(resetCredits !== undefined ? { resetCredits } : {}) }
+      return { kind: 'ok', windows, ...(label ? { plan: label } : {}), ...(hash ? { fingerprint: hash } : {}), ...credits }
     }
     if (apiKeyOnly) return { kind: 'unsupported' }
     return await fromCli(account, ctx, false)

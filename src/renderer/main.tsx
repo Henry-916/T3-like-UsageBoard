@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { UsageApi } from '../shared/ipc'
+import type { UsageProviderKind } from '../shared/types'
 import { AccountsDialog } from './components/AccountsDialog'
 import { CostTokenView } from './components/CostTokenView'
 import { LimitsView } from './components/LimitsView'
@@ -9,7 +10,7 @@ import { TopBar } from './components/TopBar'
 import { UsageModelDialog } from './components/UsageModelDialog'
 import { useLimitsData } from './hooks/useLimitsData'
 import { useUsageData } from './hooks/useUsageData'
-import { ranges, type ProviderFilter, type UsageModel, type UsageRange, type UsageView } from './usagePresentation'
+import { ranges, type UsageModel, type UsageRange, type UsageView } from './usagePresentation'
 import './styles/globals.css'
 
 declare global {
@@ -21,8 +22,9 @@ type Modal = { kind: 'model'; model: UsageModel } | { kind: 'prices'; model?: st
 function App() {
   const [range, setRange] = useState<UsageRange>('30d')
   const [view, setView] = useState<UsageView>('cost')
-  const modifiedPreferences = useRef({ window: false, tab: false })
-  const [provider, setProvider] = useState<ProviderFilter>('all')
+  const modifiedPreferences = useRef({ window: false, tab: false, hiddenProviders: false })
+  const [hiddenProviders, setHiddenProviders] = useState<UsageProviderKind[]>([])
+  const hiddenProviderSet = useMemo(() => new Set(hiddenProviders), [hiddenProviders])
   const [modal, setModal] = useState<Modal | null>(null)
   const [windowError, setWindowError] = useState('')
   const { summary, query, pending, refreshing, failed, refresh, reprice } = useUsageData(range)
@@ -44,6 +46,9 @@ function App() {
       if (!active) return
       if (preferences.window && !modifiedPreferences.current.window) setRange(preferences.window)
       if (preferences.tab && !modifiedPreferences.current.tab) setView(preferences.tab)
+      if (preferences.hiddenProviders && !modifiedPreferences.current.hiddenProviders) {
+        setHiddenProviders([...new Set(preferences.hiddenProviders)])
+      }
     }).catch(() => undefined)
     return () => { active = false }
   }, [])
@@ -60,10 +65,16 @@ function App() {
     void window.usageApi.saveUiPreferences({ tab: next }).catch(() => undefined)
   }, [])
 
+  const selectHiddenProviders = useCallback((next: UsageProviderKind[]) => {
+    modifiedPreferences.current.hiddenProviders = true
+    setHiddenProviders(next)
+    void window.usageApi.saveUiPreferences({ hiddenProviders: next }).catch(() => undefined)
+  }, [])
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented || event.isComposing || event.repeat || modal ||
-          document.querySelector(':popover-open')) return
+          document.querySelector(':popover-open, dialog[open]')) return
       const target = event.target
       if (target instanceof HTMLElement &&
           (target.isContentEditable || target.closest('input, select, textarea'))) return
@@ -94,8 +105,8 @@ function App() {
   const metric = view === 'tokens' ? 'tokens' : 'cost'
   return (
     <div className="app-shell">
-      <TopBar provider={provider} range={range} view={view} refreshing={activeRefreshing}
-        onProvider={setProvider} onRange={selectRange} onView={selectView} onRefresh={refreshActive}
+      <TopBar hiddenProviders={hiddenProviders} range={range} view={view} refreshing={activeRefreshing}
+        onHiddenProviders={selectHiddenProviders} onRange={selectRange} onView={selectView} onRefresh={refreshActive}
         onPrices={() => setModal({ kind: 'prices' })} onAccounts={() => setModal({ kind: 'accounts' })}
         onWindow={(action) => void runWindowAction(action)} />
       <main className="app-scroll">
@@ -109,15 +120,15 @@ function App() {
               </div>}
             </div>
           )}
-          {view === 'limits' ? <LimitsView report={limits.report} provider={provider} loading={limits.loading}
-            refreshing={limits.refreshing} failed={limits.failed} onRefresh={limits.refresh} /> :
-            summary && query ? <CostTokenView summary={summary} query={query} metric={metric} provider={provider}
+          {view === 'limits' ? <LimitsView report={limits.report} hiddenProviders={hiddenProviderSet} loading={limits.loading}
+            refreshing={limits.refreshing} failed={limits.failed} onRefresh={limits.refresh} onReport={limits.applyReport} /> :
+            summary && query ? <CostTokenView summary={summary} query={query} metric={metric} hiddenProviders={hiddenProviderSet}
               pending={pending} onModel={(model) => setModal({ kind: 'model', model })} /> :
               pending ? <UsageSkeleton /> : null}
         </div>
       </main>
       {modal?.kind === 'model' && summary && query && (
-        <UsageModelDialog model={modal.model} buckets={summary.buckets} query={query} provider={provider} metric={metric}
+        <UsageModelDialog model={modal.model} buckets={summary.buckets} query={query} hiddenProviders={hiddenProviderSet} metric={metric}
           onClose={() => setModal(null)} onPrice={() => setModal({ kind: 'prices', model: modal.model.model })} />
       )}
       {modal?.kind === 'prices' && (

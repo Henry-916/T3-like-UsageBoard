@@ -1,5 +1,6 @@
+import { setTimeout as delay } from 'node:timers/promises'
 import { pathKey } from '../accounts/discovery'
-import type { AccountView, LimitAccountIssue, LimitAccountReading, LimitsProbeContext, LimitsProbeResult, LimitsReport } from '../../shared/limitsTypes'
+import type { AccountView, ConsumeResetCreditOutcome, ConsumeResetCreditResult, LimitAccountIssue, LimitAccountReading, LimitsProbeContext, LimitsProbeResult, LimitsReport } from '../../shared/limitsTypes'
 import type { DiscoveredAccount, UsageProviderKind } from '../../shared/types'
 import { createLimitsCache } from './limitsCache'
 
@@ -15,6 +16,8 @@ interface Options {
   timeoutMs?: number
   intervalMs?: number
   userData?: string
+  consumeCodexCredit?: (account: DiscoveredAccount, context: LimitsProbeContext, creditId?: string) => Promise<ConsumeResetCreditOutcome>
+  resetRecheckDelaysMs?: readonly number[]
 }
 
 const rank = { native: 0, t3: 1, manual: 2 }
@@ -34,7 +37,8 @@ async function deadline<T>(signal: AbortSignal, run: () => Promise<T>): Promise<
 
 export function createLimitsService({
   discover, probes, readCredential, getManualApiKey, onUpdate,
-  fetch = globalThis.fetch, now = Date.now, timeoutMs = 60_000, intervalMs = 300_000, userData
+  fetch = globalThis.fetch, now = Date.now, timeoutMs = 60_000, intervalMs = 300_000, userData,
+  consumeCodexCredit, resetRecheckDelaysMs = [0, 1000, 2000, 4000]
 }: Options) {
   const readings = new Map<string, Reading>()
   const issues = new Map<string, LimitAccountIssue>()
@@ -43,6 +47,8 @@ export function createLimitsService({
   let inFlight: { controller: AbortController; result: Promise<LimitsReport> } | undefined
   let timer: ReturnType<typeof setInterval> | undefined
   let accountViews: Map<string, AccountView> | undefined
+  const resetting = new Set<string>()
+  const lifetime = new AbortController()
 
   function publish(refreshing: boolean, checkedAt = report.checkedAt): LimitsReport {
     const groups = new Map<string, Reading>()
@@ -136,6 +142,7 @@ export function createLimitsService({
             identity,
             data: {
               id, displayName, origin, provider, windows: result.windows, plan: result.plan, resetCredits: result.resetCredits,
+              resetCreditsExpiresAt: result.resetCreditsExpiresAt, nextResetCreditId: result.nextResetCreditId,
               checkedAt, stale: false,
               previous: prev?.identity === identity ? { checkedAt: prev.data.checkedAt, windows: prev.data.windows } : undefined
             }
@@ -166,10 +173,54 @@ export function createLimitsService({
     return result
   }
 
+  async function consumeResetCredit(accountId: string): Promise<ConsumeResetCreditResult> {
+    await ready
+    if (!consumeCodexCredit || lifetime.signal.aborted) throw new Error('无法使用重置券，请重试。')
+    const account = (await discover()).find(item => item.id === accountId && item.enabled && item.provider === 'codex')
+    const before = readings.get(accountId)
+    if (!account || !before) throw new Error('此 Codex 账号不可用。')
+    const key = before.identity
+    if (resetting.has(key)) throw new Error('该账号正在重置，请稍候。')
+    if ((before.data.resetCredits ?? 0) <= 0) return { outcome: 'noCredit', report }
+    resetting.add(key)
+    try {
+      const outcome = await consumeCodexCredit(account, {
+        signal: AbortSignal.any([lifetime.signal, AbortSignal.timeout(20_000)]), fetch, readCredential
+      }, before.data.nextResetCreditId)
+      if (outcome !== 'reset') {
+        // Reconcile stale ticket information before the next confirmation is offered.
+        if (inFlight) await inFlight.result
+        if (!lifetime.signal.aborted) await refresh()
+        return { outcome, report }
+      }
+
+      // An interval refresh may have started before redemption. Do not use it as confirmation.
+      if (inFlight) await inFlight.result
+      for (const wait of resetRecheckDelaysMs) {
+        if (lifetime.signal.aborted) break
+        if (wait > 0) await delay(wait, undefined, { signal: lifetime.signal }).catch(() => undefined)
+        if (lifetime.signal.aborted) break
+        await refresh()
+        const after = readings.get(accountId)?.data
+        if (!after || after.stale || after.checkedAt <= before.data.checkedAt) continue
+        const oldCredits = before.data.resetCredits
+        const countReduced = typeof oldCredits === 'number' && typeof after.resetCredits === 'number' && after.resetCredits < oldCredits
+        const resetConfirmed = before.data.windows.some(window =>
+          (window.kind === 'session' || window.kind === 'weekly') && window.usedPercent > 0 &&
+          after.windows.some(next => next.id === window.id && next.usedPercent === 0))
+        if (countReduced && resetConfirmed) return { outcome, report }
+      }
+      return { outcome, report, warning: '重置券已生效，但暂时无法确认最新额度，请稍后手动刷新。' }
+    } finally {
+      resetting.delete(key)
+    }
+  }
+
   return {
     ready,
     get: () => report,
     refresh,
+    consumeResetCredit,
     start(): void {
       if (timer) return
       void refresh()
@@ -198,6 +249,7 @@ export function createLimitsService({
       void refresh()
     },
     stop(): void {
+      lifetime.abort()
       clearInterval(timer)
       timer = undefined
       inFlight?.controller.abort()

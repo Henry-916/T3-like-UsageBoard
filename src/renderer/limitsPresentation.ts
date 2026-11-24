@@ -1,5 +1,7 @@
 import type { AccountOrigin, LimitAccountIssue } from '../shared/limitsTypes'
-import { providerInfo, type ProviderFilter } from './usagePresentation'
+import type { UsageProviderKind } from '../shared/types'
+import type { PooledLimitAccount } from '../shared/usageLimits'
+import { providerInfo } from './usagePresentation'
 
 export const accountOriginLabels: Record<AccountOrigin, string> = {
   native: '原生',
@@ -7,9 +9,11 @@ export const accountOriginLabels: Record<AccountOrigin, string> = {
   manual: '手动'
 }
 
-export function visibleLimitIssues(issues: readonly LimitAccountIssue[] | undefined, provider: ProviderFilter) {
-  if (!issues) return []
-  return provider === 'all' ? issues : issues.filter((issue) => issue.provider === provider)
+export function visibleLimitIssues(
+  issues: readonly LimitAccountIssue[] | undefined,
+  hiddenProviders: ReadonlySet<UsageProviderKind>
+) {
+  return issues?.filter((issue) => !hiddenProviders.has(issue.provider)) ?? []
 }
 
 export function limitIssueText(issue: LimitAccountIssue) {
@@ -35,17 +39,51 @@ export function limitDateTime(value?: string | null) {
   return Number.isFinite(timestamp) ? dateTimeFormat.format(timestamp) : null
 }
 
-export function resetCountdown(value: string | undefined, now: number) {
+function remainingTime(value: string | undefined, now: number) {
   if (!value) return null
   const remaining = Date.parse(value) - now
-  if (!Number.isFinite(remaining)) return null
-  if (remaining <= 0) return '等待更新'
-  const minutes = Math.ceil(remaining / 60_000)
+  return Number.isFinite(remaining) ? remaining : null
+}
+
+function durationText(milliseconds: number) {
+  const minutes = Math.floor(milliseconds / 60_000)
   const hours = Math.floor(minutes / 60)
   const days = Math.floor(hours / 24)
-  if (days > 0) return `${days}天${hours % 24 ? `${hours % 24}小时` : ''}`
-  if (hours > 0) return `${hours}小时${minutes % 60 ? `${minutes % 60}分` : ''}`
-  return `${minutes}分`
+  if (days > 0) return `${days} 天 ${hours % 24} 小时`
+  if (hours > 0) return `${hours} 小时 ${minutes % 60} 分钟`
+  return `${Math.max(1, minutes)} 分钟`
+}
+
+export function resetBadgeDuration(value: string | undefined, now: number) {
+  const remaining = remainingTime(value, now)
+  if (remaining === null) return null
+  return remaining <= 0 ? '即将重置' : `↻ ${durationText(remaining)}`
+}
+
+export function resetDetailTime(value: string | undefined, now: number) {
+  const remaining = remainingTime(value, now)
+  if (remaining === null) return null
+  const local = new Date(now)
+  const reset = new Date(now + remaining)
+  const clock = [reset.getHours(), reset.getMinutes()].map((part) => String(part).padStart(2, '0')).join(':')
+  const date = local.toDateString() === reset.toDateString()
+    ? clock
+    : `${reset.getMonth() + 1}月${reset.getDate()}日 ${clock}`
+  return `${date} · ${remaining <= 0 ? '即将重置' : `还需 ${durationText(remaining)}`}`
+}
+
+export function resetCreditText(credits: number, value: string | undefined, now: number) {
+  const count = `已存 ${credits} 个`
+  const remaining = remainingTime(value, now)
+  if (remaining === null) return count
+  return `${count} · ${remaining <= 0 ? '已到期' : `${durationText(remaining)}后过期`}`
+}
+
+export function limitTimeLeft(account: Pick<PooledLimitAccount, 'resetStatus' | 'resetsAt' | 'windowDurationMins'>, now: number) {
+  const duration = (account.windowDurationMins ?? 0) * 60_000
+  if (account.resetStatus !== 'upcoming' || !Number.isFinite(duration) || duration <= 0) return null
+  const remaining = remainingTime(account.resetsAt, now)
+  return remaining === null ? null : Math.min(100, Math.max(0, (remaining / duration) * 100))
 }
 
 export const formatLimitPercent = (value: number) =>

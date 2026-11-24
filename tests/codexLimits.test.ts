@@ -3,7 +3,7 @@ import { PassThrough, Writable } from 'node:stream'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { probeCodex } from '../src/main/limits/probes/codex'
+import { codexPlanLabel, probeCodex } from '../src/main/limits/probes/codex'
 import type { LimitsProbeContext } from '../src/shared/limitsTypes'
 import type { DiscoveredAccount } from '../src/shared/types'
 
@@ -52,6 +52,22 @@ beforeEach(() => {
 })
 
 describe('Codex usage probe', () => {
+  it.each([
+    ['free', 'Free'], ['go', 'Go'], ['plus', 'Plus'], ['pro', 'Pro 200'], ['prolite', 'Pro 100'],
+    ['promax', 'Pro 500'], ['self_serve_business_prolite', 'Business Premium'], ['team', 'Business'],
+    ['self_serve_business_usage_based', 'Business'], ['business', 'Business'], ['ent26', 'Enterprise'],
+    ['enterprise_cbp_automation', 'Enterprise'], ['enterprise_cbp_usage_based', 'Enterprise'],
+    ['enterprise', 'Enterprise'], ['edu', 'Edu'], ['edu_plus', 'Edu'], ['edu_pro', 'Edu']
+  ])('maps plan %s', (id, name) => {
+    expect(codexPlanLabel(id)).toBe(`ChatGPT ${name} Subscription`)
+  })
+
+  it('handles unknown, new and missing plan types', () => {
+    expect(codexPlanLabel('unknown')).toBe('ChatGPT Subscription')
+    expect(codexPlanLabel('new_plan')).toBe('new_plan')
+    expect(codexPlanLabel(undefined)).toBeUndefined()
+  })
+
   it('reads windows and counts only available unexpired Codex reset credits', async () => {
     const ctx = requestContext()
     ctx.fetch
@@ -60,13 +76,15 @@ describe('Codex usage probe', () => {
         secondary_window: { used_percent: 140, limit_window_seconds: 604_800 }
       } }))
       .mockResolvedValueOnce(Response.json({ credits: [
-        { reset_type: 'codex_rate_limits', status: 'available', expires_at: '2999-01-01' },
+        { id: 'later', reset_type: 'codex_rate_limits', status: 'available', expires_at: '2999-01-01' },
+        { id: 'first', reset_type: 'codex_rate_limits', status: 'available', expires_at: '2998-01-01' },
         { reset_type: 'codex_rate_limits', status: 'available', expires_at: '2000-01-01' },
         { reset_type: 'codex_rate_limits', status: 'available', expires_at: 'invalid' },
         { reset_type: 'codex_rate_limits', status: 'redeemed', expires_at: '2999-01-01' },
         { reset_type: 'unknown', status: 'available', expires_at: '2999-01-01' }
       ] }))
-    expect(await probeCodex(account, ctx)).toMatchObject({ kind: 'ok', plan: 'plus', resetCredits: 1,
+    expect(await probeCodex(account, ctx)).toMatchObject({ kind: 'ok', plan: 'ChatGPT Plus Subscription',
+      resetCredits: 2, nextResetCreditId: 'first', resetCreditsExpiresAt: '2998-01-01T00:00:00.000Z',
       fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/), windows: [
         { id: 'primary', kind: 'session', windowDurationMins: 300, usedPercent: 32, resetsAt: '2030-03-17T17:46:40.000Z' },
         { id: 'secondary', kind: 'weekly', windowDurationMins: 10080, usedPercent: 100 }
@@ -89,10 +107,17 @@ describe('Codex usage probe', () => {
       if (request.id === 1) send({ id: 1, result: { userAgent: 'fake' } })
       if (request.id === 2) send({ id: 2, result: {
         accountId: 'fake-account', rateLimits: { primary: { usedPercent: 4 } },
-        rateLimitsByLimitId: { codex: { primary: { usedPercent: 61, windowDurationMins: 300 } } }
+        rateLimitsByLimitId: { codex: { planType: 'go', primary: { usedPercent: 61 } } },
+        rateLimitResetCredits: { credits: [
+          { id: 'later', resetType: 'codexRateLimits', status: 'available', expiresAt: 32_473_353_600 },
+          { id: 'expired', resetType: 'codexRateLimits', status: 'available', expiresAt: 1 },
+          { id: 'first', resetType: 'codexRateLimits', status: 'available', expiresAt: 1_900_000_000 }
+        ] }
       } })
     })
-    expect(await probeCodex(account, ctx)).toMatchObject({ kind: 'ok', windows: [{ usedPercent: 61 }] })
+    expect(await probeCodex(account, ctx)).toMatchObject({ kind: 'ok', plan: 'ChatGPT Go Subscription',
+      windows: [{ usedPercent: 61, kind: 'monthly' }], resetCredits: 2, nextResetCreditId: 'first',
+      resetCreditsExpiresAt: '2030-03-17T17:46:40.000Z' })
     expect(methods).toEqual(['initialize', 'initialized', 'account/rateLimits/read'])
     expect(mocks.spawn).toHaveBeenCalledWith(expect.any(String), ['app-server'],
       expect.objectContaining({ shell: false, env: expect.objectContaining({ CODEX_HOME: home }) }))

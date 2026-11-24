@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { expect, test } from 'vitest'
+import { expect, test, vi } from 'vitest'
 import { createLimitsService } from '../src/main/limits/service'
 import type { LimitsProbeResult, LimitsReport } from '../src/shared/limitsTypes'
 import type { DiscoveredAccount } from '../src/shared/types'
@@ -56,6 +56,53 @@ const ok: LimitsProbeResult = {
   windows: [{ id: 'weekly', kind: 'weekly', label: 'Weekly', usedPercent: 42 }]
 }
 const unsupported = async () => ({ kind: 'unsupported' } as const)
+
+test('reset credit pins a discovered account and waits for confirmed quota and credit changes', async () => {
+  const codex: DiscoveredAccount = { ...native, id: 'codex', provider: 'codex' }
+  let checks = 0
+  const consumeCodexCredit = vi.fn(async () => 'reset' as const)
+  const probe = async (): Promise<LimitsProbeResult> => {
+    const updated = ++checks >= 3
+    return {
+      kind: 'ok', resetCredits: updated ? 1 : 2, nextResetCreditId: updated ? 'next-credit' : 'first-credit',
+      resetCreditsExpiresAt: '2030-01-01T00:00:00.000Z',
+      windows: [{ id: 'primary', kind: 'session', label: '5h', usedPercent: updated ? 0 : 35 }]
+    }
+  }
+  let clock = Date.parse('2026-11-24T02:00:00Z')
+  const service = createLimitsService({
+    discover: async () => [codex, native], consumeCodexCredit, resetRecheckDelaysMs: [0, 0, 0],
+    now: () => ++clock, readCredential: async () => undefined, getManualApiKey: async () => undefined,
+    onUpdate: () => undefined, probes: { codex: probe, antigravity: unsupported, opencode: unsupported, claude: unsupported }
+  })
+  await service.refresh()
+  await expect(service.consumeResetCredit(native.id)).rejects.toThrow('不可用')
+  expect(consumeCodexCredit).not.toHaveBeenCalled()
+  const result = await service.consumeResetCredit(codex.id)
+  expect(consumeCodexCredit).toHaveBeenCalledOnce()
+  expect(consumeCodexCredit).toHaveBeenCalledWith(codex, expect.objectContaining({ signal: expect.any(AbortSignal) }), 'first-credit')
+  expect(checks).toBe(3)
+  expect(result).toMatchObject({ outcome: 'reset', report: { accounts: [{
+    id: codex.id, resetCredits: 1, nextResetCreditId: 'next-credit', resetCreditsExpiresAt: '2030-01-01T00:00:00.000Z',
+    windows: [{ usedPercent: 0 }]
+  }] } })
+  expect(result.warning).toBeUndefined()
+  service.stop()
+})
+
+test('an unconfirmed reset returns a warning without submitting another redemption', async () => {
+  const codex: DiscoveredAccount = { ...native, id: 'codex', provider: 'codex' }
+  const consumeCodexCredit = vi.fn(async () => 'reset' as const)
+  const service = createLimitsService({
+    discover: async () => [codex], consumeCodexCredit, resetRecheckDelaysMs: [0, 0, 0, 0],
+    readCredential: async () => undefined, getManualApiKey: async () => undefined, onUpdate: () => undefined,
+    probes: { codex: async () => ok, antigravity: unsupported, opencode: unsupported, claude: unsupported }
+  })
+  await service.refresh()
+  expect((await service.consumeResetCredit(codex.id)).warning).toContain('暂时无法确认')
+  expect(consumeCodexCredit).toHaveBeenCalledOnce()
+  service.stop()
+})
 
 test('suppresses only issues with a healthy same-provider name or known identity', async () => {
   const sameName: DiscoveredAccount = { ...native, id: 'manual', origin: 'manual' }

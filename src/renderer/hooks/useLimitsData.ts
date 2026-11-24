@@ -55,5 +55,12 @@ export function useLimitsData() {
     }
   }, [])
 
-  return { report, loading, refreshing: manualRefresh || Boolean(report?.refreshing), failed, refresh }
+  const applyReport = useCallback((next: LimitsReport) => {
+    updates.current++
+    setReport(current => current?.checkedAt && (!next.checkedAt || next.checkedAt < current.checkedAt) ? current : next)
+    setLoading(false)
+    setFailed(false)
+  }, [])
+
+  return { report, loading, refreshing: manualRefresh || Boolean(report?.refreshing), failed, refresh, applyReport }
 }

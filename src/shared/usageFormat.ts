@@ -1,6 +1,7 @@
-const CURRENCY = new Intl.NumberFormat('en-US', {
+const CURRENCY = new Intl.NumberFormat('zh-CN', {
   style: 'currency',
   currency: 'USD',
+  currencyDisplay: 'symbol',
   minimumFractionDigits: 2,
   maximumFractionDigits: 2
 })

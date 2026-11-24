@@ -1,5 +1,7 @@
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { buildUsageChartColumns, smoothCurve } from '../src/renderer/components/UsageProviderChart'
+import { buildUsageChartColumns, chartTipOffset, smoothCurve, UsageProviderChart } from '../src/renderer/components/UsageProviderChart'
 import { aggregateUsage } from '../src/main/usage/aggregation'
 import { EMPTY_TOTALS, totalTokens, type UsageRecord, type UsageSummaryInput } from '../src/shared/types'
 
@@ -96,5 +98,32 @@ describe('usage chart monotone cubic curve', () => {
       }
     })
     expect(smoothCurve([points[0]])).toEqual([])
+  })
+})
+
+describe('usage chart tooltip positioning', () => {
+  it('follows the pointer, flips when necessary, and stays inside narrow plots', () => {
+    expect(chartTipOffset(22, 300, 152)).toBe(30)
+    expect(chartTipOffset(280, 300, 152)).toBe(120)
+    expect(chartTipOffset(70, 160, 152)).toBe(0)
+    expect(chartTipOffset(30, 40, 152)).toBe(0)
+  })
+})
+
+describe('usage chart axes', () => {
+  it('uses full USD amounts and short Chinese dates for daily data', () => {
+    const query = { sinceDay: '2026-11-18', untilDay: '2026-11-24', timeZone: 'UTC' }
+    const buckets = aggregateUsage([
+      record('2026-11-18T12:00:00Z', { reportedCostUsd: 85, totals: { ...EMPTY_TOTALS, outputTokens: 620_000_000 } })
+    ], query, pricing, {}, {})
+    const cost = renderToStaticMarkup(createElement(UsageProviderChart, { buckets, query, metric: 'cost' }))
+    expect(cost).toContain('US$100.00')
+    expect(cost).toContain('US$50.00')
+    expect(cost).toContain('11月18日')
+    expect(cost).toContain('11月21日')
+    expect(cost).toContain('11月24日')
+    const tokens = renderToStaticMarkup(createElement(UsageProviderChart, { buckets, query, metric: 'tokens' }))
+    expect(tokens).toContain('800M')
+    expect(tokens).toContain('200M')
   })
 })

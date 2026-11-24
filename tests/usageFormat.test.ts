@@ -3,8 +3,9 @@ import { formatPercent, formatTokens, formatUsd } from '../src/shared/usageForma
 
 describe('usage formatting', () => {
   it('formats USD with separators and two decimal places', () => {
-    expect(formatUsd(0)).toBe('$0.00')
-    expect(formatUsd(1234.567)).toBe('$1,234.57')
+    expect(formatUsd(0)).toBe('US$0.00')
+    expect(formatUsd(1234.567)).toBe('US$1,234.57')
+    expect(formatUsd(450.2)).toBe('US$450.20')
   })
 
   it('formats whole and compact token counts, promoting units after rounding', () => {

@@ -54,6 +54,11 @@ export function registerIpc(
     return limits.get()
   })
   ipcMain.handle(usageChannels.refreshLimits, event => { ownWindow(event); return limits.refresh() })
+  ipcMain.handle(usageChannels.consumeResetCredit, (event, accountId: unknown) => {
+    ownWindow(event)
+    if (typeof accountId !== 'string' || !accountId.trim() || accountId.length > 512) throw new Error('账号无效')
+    return limits.consumeResetCredit(accountId)
+  })
   ipcMain.handle(usageChannels.accounts, event => { ownWindow(event); return accounts.list() })
   ipcMain.handle(usageChannels.addAccount, async (event, input: unknown) => {
     ownWindow(event)

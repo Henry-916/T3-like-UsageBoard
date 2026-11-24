@@ -8,6 +8,8 @@ export interface PooledLimitAccount {
   checkedAt: string
   stale: boolean
   resetCredits?: number
+  resetCreditsExpiresAt?: string
+  nextResetCreditId?: string
   remainingPercent: number
   capacitySharePercent: number
   resetsAt?: string
@@ -114,9 +116,9 @@ export function poolUsageLimits(
         timedUsed += used
         timedElapsed += clampPercent(100 * (1 - (at - nowMs) / duration))
       }
-      const { id, displayName, origin, plan, checkedAt, stale, resetCredits } = account
+      const { id, displayName, origin, plan, checkedAt, stale, resetCredits, resetCreditsExpiresAt, nextResetCreditId } = account
       return {
-        id, displayName, origin, plan, checkedAt, stale, resetCredits,
+        id, displayName, origin, plan, checkedAt, stale, resetCredits, resetCreditsExpiresAt, nextResetCreditId,
         remainingPercent: 100 - used,
         capacitySharePercent: share * 100,
         resetsAt: resetStatus === 'unknown' ? undefined : window.resetsAt,

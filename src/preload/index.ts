@@ -11,6 +11,7 @@ const usageApi: UsageApi = {
   savePricingSettings: (settings) => ipcRenderer.invoke(usageChannels.savePricing, settings),
   getLimits: () => ipcRenderer.invoke(usageChannels.limits),
   refreshLimits: () => ipcRenderer.invoke(usageChannels.refreshLimits),
+  consumeResetCredit: accountId => ipcRenderer.invoke(usageChannels.consumeResetCredit, accountId),
   getAccounts: () => ipcRenderer.invoke(usageChannels.accounts),
   addManualAccount: input => ipcRenderer.invoke(usageChannels.addAccount, input),
   updateAccount: (id, changes) => ipcRenderer.invoke(usageChannels.updateAccount, id, changes),

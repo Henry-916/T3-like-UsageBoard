@@ -1,20 +1,21 @@
-import { useId, useMemo, useState, type KeyboardEvent, type PointerEvent } from 'react'
+import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 import { totalTokens, type UsageBucket, type UsageProviderKind, type UsageSummaryInput } from '../../shared/types'
+import { formatTokens, formatUsd } from '../../shared/usageFormat'
+import { providerInfo, trendTitle, usageDayFormat } from '../usagePresentation'
+import { ProviderMark } from './ProviderMark'
+import '../styles/usageAnalytics.css'
 
 type Metric = 'cost' | 'tokens'
 
-const PROVIDERS = [
-  { id: 'antigravity', name: 'Antigravity', color: '#8c7bd1' },
-  { id: 'opencode', name: 'OpenCode', color: '#5b9bbd' },
-  { id: 'codex', name: 'Codex', color: '#e4e4e7' },
-  { id: 'claude', name: 'Claude Code', color: '#d97757' }
-] as const
+const PROVIDERS = (['codex', 'claude', 'opencode', 'antigravity'] as const).map((id) => ({
+  id, name: providerInfo[id].label, color: providerInfo[id].color
+}))
 const HOUR_MS = 3_600_000
 const DAY_MS = 86_400_000
 const WIDTH = 960
 const HEIGHT = 260
-const TOP = 12
-const BASELINE = 248
+const TOP = 10
+const BASELINE = 260
 
 type Column = { period: string; values: Record<UsageProviderKind, number>; total: number }
 
@@ -124,47 +125,34 @@ function scaleFor(peak: number, metric: Metric): { max: number; ticks: number[];
   const magnitude = 10 ** Math.floor(Math.log10(rawStep))
   const normalized = rawStep / magnitude
   const preferred = (normalized > 5 ? 10 : normalized > 2 ? 5 : normalized > 1 ? 2 : 1) * magnitude
-  const step = metric === 'tokens' ? Math.max(1, preferred) : (preferred || peak)
+  const step = Math.max(metric === 'tokens' ? 1 : 0.01, preferred)
   const count = Math.ceil(peak / step)
   return { max: count * step, ticks: Array.from({ length: count + 1 }, (_, i) => i * step), empty: false }
 }
 
-const integer = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
-const compact = new Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 2 })
-const usd = new Intl.NumberFormat('zh-CN', {
-  style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol',
-  minimumFractionDigits: 2, maximumFractionDigits: 8
-})
-const smallUsd = new Intl.NumberFormat('zh-CN', {
-  style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol',
-  notation: 'scientific', maximumFractionDigits: 3
-})
-const axisUsd = new Intl.NumberFormat('zh-CN', {
-  style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol',
-  notation: 'compact', maximumFractionDigits: 4
-})
-const formatUsd = (value: number) => (value !== 0 && Math.abs(value) < 1e-8 ? smallUsd : usd).format(value)
-const formatValue = (value: number, metric: Metric) => metric === 'cost' ? formatUsd(value) : integer.format(value)
-const formatAxis = (value: number, metric: Metric) =>
-  value === 0 ? '0' : metric === 'tokens' ? compact.format(value) :
-    (value < 0.0001 ? smallUsd : axisUsd).format(value)
+const formatValue = (value: number, metric: Metric) => metric === 'cost' ? formatUsd(value) : formatTokens(value)
+const formatAxis = (value: number, metric: Metric) => value === 0 ? '0' : formatValue(value, metric)
 
 function periodFormatters(query: UsageSummaryInput, includeSeconds: boolean) {
   const hourly = query.resolution === 'hour'
   // UTC here preserves the local date key; hourly keys are actual UTC instants.
   const timeZone = hourly ? query.timeZone : 'UTC'
   return {
-    axis: new Intl.DateTimeFormat('zh-CN', hourly
-      ? { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }
-      : { timeZone, month: 'numeric', day: 'numeric' }),
-    detail: new Intl.DateTimeFormat('zh-CN', {
-      timeZone, year: 'numeric', month: 'long', day: 'numeric',
-      ...(hourly ? {
-        hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'shortOffset',
-        ...(includeSeconds ? { second: '2-digit' } : {})
-      } as const : {})
-    })
+    axis: hourly ? new Intl.DateTimeFormat('zh-CN', {
+      timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+    }) : usageDayFormat,
+    detail: hourly ? new Intl.DateTimeFormat('zh-CN', {
+      timeZone, month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'shortOffset',
+      ...(includeSeconds ? { second: '2-digit' } : {})
+    }) : usageDayFormat
   }
+}
+
+export function chartTipOffset(at: number, panelSize: number, tipSize: number): number {
+  const gap = 8
+  const candidate = at + gap + tipSize <= panelSize ? at + gap : at - gap - tipSize
+  return Math.max(0, Math.min(panelSize - tipSize, candidate))
 }
 
 interface Props {
@@ -194,26 +182,63 @@ export function UsageProviderChart({ buckets, query, metric }: Props) {
   }, [buckets, metric, query])
   const { columns, providers, scale, x, y, paths, axis, detail } = chart
   const uid = useId()
-  const [hover, setHover] = useState<string | null>(null)
+  const plot = useRef<HTMLDivElement>(null)
+  const tip = useRef<HTMLDivElement>(null)
+  const [hover, setHover] = useState<(Point & { period: string }) | null>(null)
   const [keyboard, setKeyboard] = useState<string | null>(null)
   const [focused, setFocused] = useState(false)
   const lastIndex = columns.length - 1
-  const selected = columns.findIndex(({ period }) => period === (hover ?? keyboard))
+  const selected = columns.findIndex(({ period }) => period === (hover?.period ?? keyboard))
   const active = selected < 0 && focused ? lastIndex : selected
-  const column = columns[active]
-  const label = `${query.resolution === 'hour' ? '每小时' : '每日'}${metric === 'cost' ? '费用' : ' token'}趋势`
+  const column = providers.length > 0 ? columns[active] : undefined
+  const label = trendTitle(query, metric)
   const amount = (value: number) => formatValue(value, metric)
   const dateLabel = column ? detail.format(new Date(column.period)) : ''
-  const axisIndices = [...new Set([0, Math.floor(lastIndex / 2), lastIndex])].filter(i => columns[i])
+  const axisIndices = [...new Set([0, ...(lastIndex > 2 ? [Math.floor(lastIndex / 2)] : []), lastIndex])].filter(i => columns[i])
   const activeX = x(active)
+  const showTip = Boolean(column)
 
-  const indexAt = (event: PointerEvent<HTMLDivElement>) => {
+  const trackPointer = (event: PointerEvent<HTMLDivElement>) => {
     const box = event.currentTarget.getBoundingClientRect()
-    return Math.min(lastIndex, Math.max(0, Math.round(((event.clientX - box.left) / box.width) * lastIndex)))
+    const x = Math.max(0, Math.min(box.width, event.clientX - box.left))
+    const y = Math.max(0, Math.min(box.height, event.clientY - box.top))
+    const index = Math.min(lastIndex, Math.max(0, Math.round((x / box.width) * lastIndex)))
+    const period = columns[index]?.period
+    setHover(period ? { x, y, period } : null)
   }
 
+  const placeTooltip = useCallback((pointer: Point | null, anchoredX: number) => {
+    const plane = plot.current
+    const tooltip = tip.current
+    if (!plane || !tooltip) return
+    const { clientWidth: width, clientHeight: height } = plane
+    const { offsetWidth, offsetHeight } = tooltip
+    const left = chartTipOffset(pointer?.x ?? (anchoredX / WIDTH) * width, width, offsetWidth)
+    const top = chartTipOffset(pointer?.y ?? (TOP / HEIGHT) * height, height, offsetHeight)
+    tooltip.style.transform = `translate(${left}px, ${top}px)`
+  }, [])
+
+  const coordinates = useRef({ hover, activeX })
+  useLayoutEffect(() => {
+    coordinates.current = { hover, activeX }
+    placeTooltip(hover, activeX)
+  }, [activeX, column, hover, placeTooltip])
+  useLayoutEffect(() => {
+    const plane = plot.current
+    const tooltip = tip.current
+    if (!showTip || !plane || !tooltip) return
+    // The measured tooltip may change when narrow columns wrap or fonts load.
+    const observer = new ResizeObserver(() => {
+      const { hover, activeX } = coordinates.current
+      placeTooltip(hover, activeX)
+    })
+    observer.observe(plane)
+    observer.observe(tooltip)
+    return () => observer.disconnect()
+  }, [placeTooltip, showTip])
+
   const navigate = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (lastIndex < 0) return
+    if (lastIndex < 0 || providers.length === 0) return
     const from = active < 0 ? lastIndex : active
     const next = ({
       ArrowLeft: Math.max(0, from - 1),
@@ -230,13 +255,13 @@ export function UsageProviderChart({ buckets, query, metric }: Props) {
 
   return (
     <div className="ud-usage-chart">
-      <style>{styles}</style>
       <div className="ud-usage-chart-y" aria-hidden>
         {scale.ticks.filter(tick => !scale.empty || tick === 0).map(tick => (
           <span key={tick} style={{ top: `${y(tick) / HEIGHT * 100}%` }}>{formatAxis(tick, metric)}</span>
         ))}
       </div>
       <div
+        ref={plot}
         className="ud-usage-chart-plot"
         role="group"
         aria-label={label}
@@ -245,22 +270,23 @@ export function UsageProviderChart({ buckets, query, metric }: Props) {
         onFocus={event => { if (event.currentTarget.matches(':focus-visible')) setFocused(true) }}
         onBlur={() => { setFocused(false); setKeyboard(null); setHover(null) }}
         onKeyDown={navigate}
-        onPointerMove={event => { if (event.pointerType !== 'touch') setHover(columns[indexAt(event)]?.period ?? null) }}
-        onPointerLeave={() => setHover(null)}
-        onPointerDown={event => { if (event.pointerType === 'touch') setKeyboard(columns[indexAt(event)]?.period ?? null) }}
+        onPointerMove={event => { if (event.pointerType !== 'touch') trackPointer(event) }}
+        onPointerLeave={event => { if (event.pointerType !== 'touch') setHover(null) }}
+        onPointerDown={event => { if (event.pointerType === 'touch') trackPointer(event) }}
+        onPointerCancel={() => setHover(null)}
       >
         <svg aria-hidden="true" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} preserveAspectRatio="none">
           <defs>
             {paths.map(({ id, color }) => (
               <linearGradient key={id} id={`${uid}-${id}`} x1="0" x2="0" y1="0" y2="1">
-                <stop offset="0%" stopColor={color} stopOpacity={0.23} />
-                <stop offset="100%" stopColor={color} stopOpacity={0.025} />
+                <stop offset="0%" stopColor={color} stopOpacity={0.14} />
+                <stop offset="100%" stopColor={color} stopOpacity={0.11} />
               </linearGradient>
             ))}
           </defs>
           {scale.ticks.map(tick => (
             <line key={tick} x1="0" x2={WIDTH} y1={y(tick)} y2={y(tick)}
-              stroke={tick === 0 ? '#ffffff24' : '#ffffff13'} vectorEffect="non-scaling-stroke" />
+              stroke={tick === 0 ? 'rgb(255 255 255 / 0.14)' : 'rgb(255 255 255 / 0.08)'} vectorEffect="non-scaling-stroke" />
           ))}
           {paths.map(({ id, line }) => line && (
             <path key={id} d={`${line} L${WIDTH},${BASELINE} L0,${BASELINE} Z`} fill={`url(#${uid}-${id})`} />
@@ -269,31 +295,26 @@ export function UsageProviderChart({ buckets, query, metric }: Props) {
             <path key={id} d={line} fill="none" stroke={color} strokeWidth="1.65"
               strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
           ))}
+          {columns.length === 1 && paths.map(({ id, color, points: [point] }) => (
+            <line key={id} x1={point.x - 6} x2={point.x + 6} y1={point.y} y2={point.y}
+              stroke={color} strokeWidth={2} strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+          ))}
           {column && (
-            <line x1={activeX} x2={activeX} y1={TOP} y2={BASELINE} stroke="#f4f4f57a"
+            <line x1={activeX} x2={activeX} y1={TOP} y2={BASELINE} stroke="#818181" strokeWidth={1}
               vectorEffect="non-scaling-stroke" />
           )}
         </svg>
-        {paths.map(({ id, color, points }) => {
-          const point = points[columns.length === 1 ? 0 : active]
-          if (!point || (column && column.values[id] === 0)) return null
-          return <span key={id} aria-hidden className="ud-usage-chart-point" style={{
-            left: `${point.x / WIDTH * 100}%`, top: `${point.y / HEIGHT * 100}%`, background: color
-          }} />
-        })}
         {column && (
-          <div className="ud-usage-chart-tip" aria-hidden="true" style={{
-            [activeX <= WIDTH / 2 ? 'left' : 'right']: `clamp(0px, calc(${(activeX <= WIDTH / 2 ? activeX : WIDTH - activeX) / WIDTH * 100}% + 10px), max(0px, calc(100% - 14rem)))`
-          }}>
+          <div className="ud-usage-chart-tip" ref={tip} aria-hidden="true">
             <div className="ud-usage-chart-date">{dateLabel}</div>
-            {providers.map(({ id, name, color }) => (
+            {providers.map(({ id, name }) => (
               <div className="ud-usage-chart-row" key={id}>
-                <span><i style={{ background: color }} />{name}</span>
+                <span><ProviderMark provider={id} className="size-3" />{name}</span>
                 <span>{amount(column.values[id])}</span>
               </div>
             ))}
             <div className="ud-usage-chart-row ud-usage-chart-total">
-              <span>合计</span><span>{amount(column.total)}</span>
+              <span>总计</span><span>{amount(column.total)}</span>
             </div>
           </div>
         )}
@@ -302,7 +323,7 @@ export function UsageProviderChart({ buckets, query, metric }: Props) {
           {focused && !hover && column && [
             dateLabel,
             ...providers.map(({ id, name }) => `${name} ${amount(column.values[id])}`),
-            `合计 ${amount(column.total)}`
+            `总计 ${amount(column.total)}`
           ].join('，')}
         </span>
       </div>
@@ -316,33 +337,3 @@ export function UsageProviderChart({ buckets, query, metric }: Props) {
     </div>
   )
 }
-
-const styles = `
-.ud-usage-chart {
-  display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); grid-template-rows: minmax(13rem, 1fr) 1.3rem;
-  min-width: 0; min-height: 14.3rem; height: 100%; column-gap: .7rem;
-  color: var(--color-subtle, #a1a1aa); font-size: .8125rem; font-variant-numeric: tabular-nums;
-}
-.ud-usage-chart-y, .ud-usage-chart-x, .ud-usage-chart-plot { position: relative; min-width: 0; }
-.ud-usage-chart-y span { position: absolute; right: 0; translate: 0 -50%; white-space: nowrap; }
-.ud-usage-chart-x { grid-column: 2; }
-.ud-usage-chart-x span { position: absolute; bottom: 0; white-space: nowrap; }
-.ud-usage-chart-plot { outline: none; }
-.ud-usage-chart-plot:focus-visible { outline: 1px solid #a1a1aa; outline-offset: 4px; border-radius: 3px; }
-.ud-usage-chart-plot > svg { position: absolute; inset: 0; display: block; width: 100%; height: 100%; overflow: visible; }
-.ud-usage-chart-point {
-  position: absolute; width: 7px; height: 7px; border-radius: 50%; translate: -50% -50%;
-  border: 1px solid var(--color-canvas, #09090b); pointer-events: none;
-}
-.ud-usage-chart-tip {
-  position: absolute; z-index: 2; top: .7rem; width: min(14rem, 100%); box-sizing: border-box;
-  padding: .6rem .7rem; pointer-events: none; border: 1px solid #ffffff18; border-radius: .55rem;
-  background: #17171a; color: var(--color-ink, #e4e4e7); box-shadow: 0 6px 22px #0007;
-}
-.ud-usage-chart-date { color: var(--color-subtle, #a1a1aa); margin-bottom: .3rem; }
-.ud-usage-chart-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0 .5rem; }
-.ud-usage-chart-row > span:first-child { display: inline-flex; align-items: center; gap: .4rem; }
-.ud-usage-chart-row > span:last-child { margin-left: auto; }
-.ud-usage-chart-row i { width: .45rem; height: .45rem; border-radius: 50%; }
-.ud-usage-chart-total { border-top: 1px solid #ffffff18; margin-top: .35rem; padding-top: .35rem; font-weight: 600; }
-`

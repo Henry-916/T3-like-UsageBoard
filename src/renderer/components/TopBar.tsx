@@ -1,6 +1,8 @@
-import { ChevronDown, Minus, RefreshCw, Settings2, X } from 'lucide-react'
-import { useRef } from 'react'
-import { providerInfo, providers, ranges, type ProviderFilter, type UsageRange, type UsageView } from '../usagePresentation'
+import { Check, ChevronDown, Minus, RefreshCw, Settings2, X } from 'lucide-react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import type { UsageProviderKind } from '../../shared/types'
+import { providerInfo, providers, ranges, type UsageRange, type UsageView } from '../usagePresentation'
+import { ProviderMark } from './ProviderMark'
 
 const views = [
   { value: 'cost', label: '费用', shortcut: 'C' },
@@ -27,9 +29,25 @@ export function Segmented<T extends string>({ label, value, options, onChange }:
   )
 }
 
-export function TopBar({ provider, range, view, refreshing, onProvider, onRange, onView, onRefresh, onPrices, onAccounts, onWindow }: {
-  provider: ProviderFilter; range: UsageRange; view: UsageView; refreshing: boolean
-  onProvider: (provider: ProviderFilter) => void
+const providerOrder = ['codex', 'claude', 'opencode', 'antigravity'] as const satisfies readonly UsageProviderKind[]
+
+function placePopover(panel: HTMLDivElement | null, trigger: HTMLButtonElement | null, alignEnd = false) {
+  if (CSS.supports('position-area: block-end span-inline-end') || !panel?.matches(':popover-open') || !trigger) return
+  const anchor = trigger.getBoundingClientRect()
+  const { width, height } = panel.getBoundingClientRect()
+  const edge = 8
+  const gap = 6
+  const left = alignEnd ? anchor.right - width : anchor.left
+  const below = anchor.bottom + gap
+  const above = anchor.top - gap - height
+  const top = below + height > window.innerHeight - edge && above >= edge ? above : below
+  panel.style.left = `${Math.max(edge, Math.min(left, window.innerWidth - width - edge))}px`
+  panel.style.top = `${Math.max(edge, Math.min(top, window.innerHeight - height - edge))}px`
+}
+
+export function TopBar({ hiddenProviders, range, view, refreshing, onHiddenProviders, onRange, onView, onRefresh, onPrices, onAccounts, onWindow }: {
+  hiddenProviders: readonly UsageProviderKind[]; range: UsageRange; view: UsageView; refreshing: boolean
+  onHiddenProviders: (providers: UsageProviderKind[]) => void
   onRange: (range: UsageRange) => void
   onView: (view: UsageView) => void
   onRefresh: () => void
@@ -39,48 +57,144 @@ export function TopBar({ provider, range, view, refreshing, onProvider, onRange,
 }) {
   const settingsPanel = useRef<HTMLDivElement>(null)
   const settingsTrigger = useRef<HTMLButtonElement>(null)
+  const providerPanel = useRef<HTMLDivElement>(null)
+  const providerTrigger = useRef<HTMLButtonElement>(null)
+  const initialItem = useRef(0)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [activeItem, setActiveItem] = useState(0)
+  const visible = providers.filter((entry) => !hiddenProviders.includes(entry))
+  const allVisible = visible.length === providers.length
+  const filterLabel = allVisible ? '所有提供方'
+    : visible.length === 0 ? '无提供方'
+    : visible.length === 1 ? providerInfo[visible[0]].label
+    : `${visible.length} 个提供方`
   const refreshLabel = view === 'limits' ? '刷新额度' : '刷新用量'
+
+  useEffect(() => {
+    if (CSS.supports('position-area: block-end span-inline-end')) return
+    function reposition() {
+      placePopover(providerPanel.current, providerTrigger.current)
+      placePopover(settingsPanel.current, settingsTrigger.current, true)
+    }
+    window.addEventListener('resize', reposition)
+    return () => window.removeEventListener('resize', reposition)
+  }, [])
+
   function choose(action: () => void) {
     settingsPanel.current?.hidePopover()
     settingsTrigger.current?.focus()
     action()
   }
 
+  function focusMenuItem(index: number) {
+    providerPanel.current?.querySelectorAll<HTMLButtonElement>('[role="menuitemcheckbox"]')[index]?.focus()
+  }
+
+  function onTriggerKey(event: KeyboardEvent<HTMLButtonElement>) {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+    event.preventDefault()
+    const index = event.key === 'ArrowDown' ? 0 : providerOrder.length
+    const panel = providerPanel.current
+    if (panel?.matches(':popover-open')) {
+      focusMenuItem(index)
+    } else {
+      initialItem.current = index
+      event.currentTarget.click()
+    }
+  }
+
+  function onProviderMenuKey(event: KeyboardEvent<HTMLDivElement>) {
+    const count = providerOrder.length + 1
+    if (event.key === 'Escape' || event.key === 'Tab') {
+      if (event.key === 'Escape' || event.shiftKey) event.preventDefault()
+      event.currentTarget.hidePopover()
+      providerTrigger.current?.focus()
+      return
+    }
+    let next: number
+    switch (event.key) {
+      case 'ArrowDown': next = (activeItem + 1) % count; break
+      case 'ArrowUp': next = (activeItem + count - 1) % count; break
+      case 'Home': next = 0; break
+      case 'End': next = count - 1; break
+      default: return
+    }
+    event.preventDefault()
+    focusMenuItem(next)
+  }
+
+  function toggleProvider(entry: UsageProviderKind) {
+    onHiddenProviders(hiddenProviders.includes(entry)
+      ? hiddenProviders.filter((kind) => kind !== entry)
+      : [...hiddenProviders, entry])
+  }
+
   return (
-    <header className="titlebar" data-view={view}>
+    <header className="titlebar">
       <div className="titlebar-leading flex min-w-0 items-center gap-2.5">
-        <h1 className="shrink-0 text-sm font-semibold">用量</h1>
+        <h1>用量</h1>
         <span className="titlebar-slash" aria-hidden="true">/</span>
-        <label className="provider-select">
-          <select aria-label="提供方" value={provider} onChange={(event) => onProvider(event.currentTarget.value as ProviderFilter)}>
-            <option value="all">所有提供方</option>
-            {providers.map((entry) => <option key={entry} value={entry}>{providerInfo[entry].label}</option>)}
-          </select>
-          <ChevronDown size={12} aria-hidden="true" />
-        </label>
+        <button ref={providerTrigger} type="button" className="provider-trigger" popoverTarget="provider-panel"
+          aria-haspopup="menu" aria-controls="provider-panel" aria-expanded={menuOpen} onKeyDown={onTriggerKey}>
+          <span>{filterLabel}</span>
+          <ChevronDown size={14} aria-hidden="true" />
+        </button>
+        <div id="provider-panel" ref={providerPanel} popover="auto" className="provider-panel"
+          role="menu" aria-label="提供方" onKeyDown={onProviderMenuKey} onToggle={(event) => {
+            const open = event.currentTarget.matches(':popover-open')
+            setMenuOpen(open)
+            if (open) {
+              placePopover(event.currentTarget, providerTrigger.current)
+              focusMenuItem(initialItem.current)
+            }
+            initialItem.current = 0
+          }}>
+          <button type="button" role="menuitemcheckbox" aria-checked={allVisible}
+            tabIndex={activeItem === 0 ? 0 : -1} onFocus={() => setActiveItem(0)}
+            onClick={() => onHiddenProviders(allVisible ? [...providers] : [])}>
+            <span className="provider-check" aria-hidden="true">{allVisible && <Check size={14} />}</span>
+            所有提供方
+          </button>
+          <hr className="menu-separator" />
+          {providerOrder.map((entry, index) => {
+            const checked = !hiddenProviders.includes(entry)
+            return (
+              <button key={entry} type="button" role="menuitemcheckbox" aria-checked={checked}
+                tabIndex={activeItem === index + 1 ? 0 : -1} onFocus={() => setActiveItem(index + 1)}
+                onClick={() => toggleProvider(entry)}>
+                <span className="provider-check" aria-hidden="true">{checked && <Check size={14} />}</span>
+                <ProviderMark provider={entry} className="size-3.5" />
+                {providerInfo[entry].label}
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       <div className="titlebar-actions">
         {view !== 'limits' && <Segmented label="时间范围" options={ranges} value={range} onChange={onRange} />}
         <Segmented label="用量视图" options={views} value={view} onChange={onView} />
-        <button type="button" className="icon-button" aria-label={refreshLabel} title={`${refreshLabel} (R)`}
-          aria-busy={refreshing} disabled={refreshing} onClick={onRefresh}>
-          <RefreshCw size={15} className={refreshing ? 'motion-safe:animate-spin' : undefined} aria-hidden="true" />
-        </button>
-        <button ref={settingsTrigger} type="button" className="icon-button" aria-label="设置" title="设置" popoverTarget="settings-panel">
-          <Settings2 size={16} aria-hidden="true" />
-        </button>
-        <div id="settings-panel" ref={settingsPanel} popover="auto" className="settings-panel" aria-label="设置">
-          <button type="button" aria-haspopup="dialog" onClick={() => choose(onAccounts)}>账号管理</button>
-          <button type="button" aria-haspopup="dialog" onClick={() => choose(onPrices)}>自定义模型价格</button>
-        </div>
-        <div className="window-controls">
-          <button type="button" className="icon-button" aria-label="最小化" title="最小化" onClick={() => onWindow('minimize')}>
-            <Minus size={16} strokeWidth={1.5} aria-hidden="true" />
+        <div className="titlebar-tools">
+          <button type="button" className="icon-button" aria-label={refreshLabel} title={`${refreshLabel} (R)`}
+            aria-busy={refreshing} disabled={refreshing} onClick={onRefresh}>
+            <RefreshCw size={15} className={refreshing ? 'motion-safe:animate-spin' : undefined} aria-hidden="true" />
           </button>
-          <button type="button" className="icon-button close-window" aria-label="关闭到托盘" title="关闭到托盘" onClick={() => onWindow('hide')}>
-            <X size={16} strokeWidth={1.5} aria-hidden="true" />
+          <button ref={settingsTrigger} type="button" className="icon-button" aria-label="设置" title="设置" popoverTarget="settings-panel">
+            <Settings2 size={15} aria-hidden="true" />
           </button>
+          <div id="settings-panel" ref={settingsPanel} popover="auto" className="settings-panel" aria-label="设置"
+            onToggle={(event) => placePopover(event.currentTarget, settingsTrigger.current, true)}>
+            <button type="button" aria-haspopup="dialog" onClick={() => choose(onAccounts)}>账号管理</button>
+            <button type="button" aria-haspopup="dialog" onClick={() => choose(onPrices)}>自定义模型价格</button>
+          </div>
+          <div className="window-controls">
+            <button type="button" className="icon-button" aria-label="最小化" title="最小化" onClick={() => onWindow('minimize')}>
+              <Minus size={15} strokeWidth={1.5} aria-hidden="true" />
+            </button>
+            <button type="button" className="icon-button close-window" aria-label="关闭到托盘" title="关闭到托盘" onClick={() => onWindow('hide')}>
+              <X size={15} strokeWidth={1.5} aria-hidden="true" />
+            </button>
+          </div>
         </div>
       </div>
     </header>

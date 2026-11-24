@@ -1,5 +1,5 @@
 import type { PricingSettings, UiPreferences, UsageSummary, UsageSummaryInput } from './types'
-import type { AccountChanges, AccountsReport, AddManualAccount, LimitsReport } from './limitsTypes'
+import type { AccountChanges, AccountsReport, AddManualAccount, ConsumeResetCreditResult, LimitsReport } from './limitsTypes'
 
 export const usageChannels = {
   minimize: 'usage:window-minimize',
@@ -10,6 +10,7 @@ export const usageChannels = {
   savePricing: 'usage:save-pricing-settings',
   limits: 'usage:get-limits',
   refreshLimits: 'usage:refresh-limits',
+  consumeResetCredit: 'usage:consume-reset-credit',
   limitsUpdated: 'usage:limits-updated',
   accounts: 'usage:get-accounts',
   addAccount: 'usage:add-manual-account',
@@ -29,6 +30,7 @@ export interface UsageApi {
   onRefreshRequested(listener: () => void): () => void
   getLimits(): Promise<LimitsReport>
   refreshLimits(): Promise<LimitsReport>
+  consumeResetCredit(accountId: string): Promise<ConsumeResetCreditResult>
   onLimitsUpdated(listener: (report: LimitsReport) => void): () => void
   getAccounts(): Promise<AccountsReport>
   addManualAccount(input: AddManualAccount): Promise<AccountsReport | null>

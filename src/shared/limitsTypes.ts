@@ -20,6 +20,8 @@ export type LimitsProbeResult = {
   fingerprint?: string
   plan?: string
   resetCredits?: number
+  resetCreditsExpiresAt?: string
+  nextResetCreditId?: string
 } | { kind: 'unsupported' } | { kind: 'failed'; reason?: LimitFailureReason }
 
 export interface LimitsProbeContext {
@@ -40,6 +42,8 @@ export interface LimitAccountReading {
   checkedAt: string
   stale: boolean
   resetCredits?: number
+  resetCreditsExpiresAt?: string
+  nextResetCreditId?: string
   previous?: { checkedAt: string; windows: LimitWindow[] }
 }
 
@@ -57,6 +61,14 @@ export interface LimitsReport {
   issues?: LimitAccountIssue[]
   checkedAt: string | null
   refreshing: boolean
+}
+
+export type ConsumeResetCreditOutcome = 'reset' | 'nothingToReset' | 'noCredit' | 'alreadyRedeemed'
+
+export interface ConsumeResetCreditResult {
+  outcome: ConsumeResetCreditOutcome
+  report: LimitsReport
+  warning?: string
 }
 
 export interface AccountView {

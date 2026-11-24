@@ -1,10 +1,9 @@
-import { totalTokens, type UsageBucket, type UsageProviderKind, type UsageSummaryInput } from '../shared/types'
+import { totalTokens, type UsageBucket, type UsageProviderKind, type UsageSummary, type UsageSummaryInput } from '../shared/types'
 import { formatTokens, formatUsd } from '../shared/usageFormat'
 import { sumUsageBuckets } from '../shared/usageMerge'
 
 export type UsageMetric = 'cost' | 'tokens'
 export type UsageView = UsageMetric | 'limits'
-export type ProviderFilter = UsageProviderKind | 'all'
 export type UsageRange = '24h' | '7d' | '30d' | '90d'
 
 export const providers = ['antigravity', 'opencode', 'codex', 'claude'] as const
@@ -52,6 +51,29 @@ export function groupBuckets<K>(buckets: readonly UsageBucket[], keyFor: (bucket
   return map
 }
 
+export function visibleUsage<K extends { provider: UsageProviderKind }>(
+  items: readonly K[], hiddenProviders: ReadonlySet<UsageProviderKind>
+): readonly K[] {
+  return hiddenProviders.size ? items.filter(({ provider }) => !hiddenProviders.has(provider)) : items
+}
+
+export function visibleUsageSummary(summary: UsageSummary, hiddenProviders: ReadonlySet<UsageProviderKind>) {
+  const sources = visibleUsage(summary.sources, hiddenProviders)
+  return {
+    buckets: visibleUsage(summary.buckets, hiddenProviders),
+    sources,
+    sessions: sources.reduce((total, source) => total + source.distinctSessions, 0)
+  }
+}
+
+export function trendTitle(query: UsageSummaryInput, metric: UsageMetric): string {
+  return `${query.resolution === 'hour' ? '每小时' : '每天'}${metric === 'cost' ? '费用' : '处理的 token'}`
+}
+
+export const usageDayFormat = new Intl.DateTimeFormat('zh-CN', {
+  month: 'short', day: 'numeric', timeZone: 'UTC'
+})
+
 export function usageFigures(buckets: readonly UsageBucket[]) {
   const sum = sumUsageBuckets(buckets)
   return {
@@ -81,13 +103,15 @@ export function usageSegments(values: UsageFigures, metric: UsageMetric): ShareS
   const { totals, categoryCostUsd: cost } = values
   return metric === 'cost'
     ? [
-        { label: '输入', value: cost.input, intensity: 60 },
+        { label: '输入框', value: cost.input, intensity: 60 },
         { label: '缓存读取', value: cost.cacheRead, intensity: 30 },
+        { label: '缓存写入', value: cost.cacheWrite, intensity: 72 },
         { label: '输出', value: cost.output, intensity: 100 },
-        { label: '其他', value: Math.max(0, values.costUsd - cost.input - cost.cacheRead - cost.output), intensity: 44 }
+        // Ignore floating-point noise when all costs are already allocated.
+        { label: '其他', value: Math.max(0, Number((values.costUsd - cost.input - cost.cacheRead - cost.cacheWrite - cost.output).toFixed(8))), intensity: 44 }
       ]
     : [
-        { label: '输入', value: totals.uncachedInputTokens, intensity: 60 },
+        { label: '输入框', value: totals.uncachedInputTokens, intensity: 60 },
         { label: '缓存读取', value: totals.cachedInputTokens, intensity: 30 },
         { label: '缓存写入', value: totals.cacheCreationTokens, intensity: 72 },
         { label: '输出', value: totals.outputTokens, intensity: 100 }

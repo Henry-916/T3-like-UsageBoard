@@ -149,7 +149,8 @@ export const pricingSettingsSchema = z.object({
 export type PricingSettings = z.infer<typeof pricingSettingsSchema>
 export const uiPreferencesSchema = z.object({
   tab: z.enum(['cost', 'tokens', 'limits']).optional(),
-  window: z.enum(['24h', '7d', '30d', '90d']).optional()
+  window: z.enum(['24h', '7d', '30d', '90d']).optional(),
+  hiddenProviders: z.array(providerSchema).max(4).optional()
 })
 export type UiPreferences = z.infer<typeof uiPreferencesSchema>
 

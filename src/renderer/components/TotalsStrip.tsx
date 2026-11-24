@@ -10,7 +10,7 @@ export function TotalsStrip({ values }: { values: UsageFigures }) {
     ['缓存节省', formatUsd(values.cacheSavingsUsd)]
   ]
   return (
-    <section className="flex flex-col gap-2">
+    <section className="flex flex-col gap-3">
       <h2 className="section-title">总计</h2>
       <dl className="totals-grid">
         {stats.map(([label, value]) => (
