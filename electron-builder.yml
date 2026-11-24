@@ -1,0 +1,29 @@
+appId: com.usage-dashboard.app
+productName: Usage Dashboard
+npmRebuild: false
+directories:
+  output: dist
+files:
+  - out/**/*
+  - LICENSE
+  - THIRD_PARTY_LICENSES.md
+  - resources/tray-icon.ico
+  - resources/tray-icon.png
+extraResources:
+  - from: resources/fallback-rates.json
+    to: fallback-rates.json
+win:
+  icon: resources/tray-icon.ico
+  signExecutable: false
+  target:
+    - target: nsis
+      arch: x64
+    - target: portable
+      arch: x64
+nsis:
+  perMachine: false
+  allowElevation: false
+  artifactName: ${name}-${version}-setup-${arch}.${ext}
+portable:
+  requestExecutionLevel: user
+  artifactName: ${name}-${version}-portable-${arch}.${ext}

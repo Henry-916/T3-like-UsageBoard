@@ -1,0 +1,38 @@
+{
+  "name": "usage-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "独立的 Windows AI 用量看板",
+  "license": "MIT",
+  "main": "./out/main/index.js",
+  "packageManager": "pnpm@12.10.1",
+  "scripts": {
+    "postinstall": "install-electron",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "package:win": "pnpm build && electron-builder --win --x64",
+    "preview": "electron-vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "lucide-react": "^1.0.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^45.4.1",
+    "electron-builder": "26.18.0",
+    "electron-vite": "^6.0.0",
+    "tailwindcss": "^4.1.0",
+    "typescript": "~5.9.3",
+    "vite": "^7.3.0",
+    "vitest": "^4.1.12"
+  }
+}

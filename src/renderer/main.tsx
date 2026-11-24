@@ -1,0 +1,161 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createRoot } from 'react-dom/client'
+import type { UsageApi } from '../shared/ipc'
+import { AccountsDialog } from './components/AccountsDialog'
+import { CostTokenView } from './components/CostTokenView'
+import { LimitsView } from './components/LimitsView'
+import { PriceOverridesDialog } from './components/PriceOverridesDialog'
+import { TopBar } from './components/TopBar'
+import { UsageModelDialog } from './components/UsageModelDialog'
+import { useLimitsData } from './hooks/useLimitsData'
+import { useUsageData } from './hooks/useUsageData'
+import { ranges, type ProviderFilter, type UsageModel, type UsageRange, type UsageView } from './usagePresentation'
+import './styles/globals.css'
+
+declare global {
+  interface Window { usageApi: UsageApi }
+}
+
+type Modal = { kind: 'model'; model: UsageModel } | { kind: 'prices'; model?: string } | { kind: 'accounts' }
+
+function App() {
+  const [range, setRange] = useState<UsageRange>('30d')
+  const [view, setView] = useState<UsageView>('cost')
+  const modifiedPreferences = useRef({ window: false, tab: false })
+  const [provider, setProvider] = useState<ProviderFilter>('all')
+  const [modal, setModal] = useState<Modal | null>(null)
+  const [windowError, setWindowError] = useState('')
+  const { summary, query, pending, refreshing, failed, refresh, reprice } = useUsageData(range)
+  const limits = useLimitsData()
+  const activeRefreshing = view === 'limits' ? limits.refreshing : refreshing
+  const refreshActive = view === 'limits' ? limits.refresh : refresh
+  const seenModels = useMemo(() => [...new Set(summary?.buckets.map((bucket) => bucket.model))], [summary])
+
+  const runWindowAction = useCallback(async (action: 'minimize' | 'hide') => {
+    setWindowError('')
+    try { await window.usageApi[action]() } catch {
+      setWindowError(action === 'minimize' ? '无法最小化窗口。' : '无法将窗口隐藏到托盘。')
+    }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    void window.usageApi.getUiPreferences().then(preferences => {
+      if (!active) return
+      if (preferences.window && !modifiedPreferences.current.window) setRange(preferences.window)
+      if (preferences.tab && !modifiedPreferences.current.tab) setView(preferences.tab)
+    }).catch(() => undefined)
+    return () => { active = false }
+  }, [])
+
+  const selectRange = useCallback((next: UsageRange) => {
+    modifiedPreferences.current.window = true
+    setRange(next)
+    void window.usageApi.saveUiPreferences({ window: next }).catch(() => undefined)
+  }, [])
+
+  const selectView = useCallback((next: UsageView) => {
+    modifiedPreferences.current.tab = true
+    setView(next)
+    void window.usageApi.saveUiPreferences({ tab: next }).catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented || event.isComposing || event.repeat || modal ||
+          document.querySelector(':popover-open')) return
+      const target = event.target
+      if (target instanceof HTMLElement &&
+          (target.isContentEditable || target.closest('input, select, textarea'))) return
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        void runWindowAction('hide')
+      } else if (event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey && view !== 'limits') {
+        const match = /^(?:Digit|Numpad)([1-4])$/.exec(event.code)
+        if (match) {
+          event.preventDefault()
+          selectRange(ranges[Number(match[1]) - 1].value)
+        }
+      } else if (!event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey) {
+        const key = event.key.toLowerCase()
+        if (key === 'r' && !activeRefreshing) {
+          event.preventDefault()
+          void refreshActive()
+        } else if (key === 'c' || key === 't' || key === 'l') {
+          event.preventDefault()
+          selectView(key === 'c' ? 'cost' : key === 't' ? 'tokens' : 'limits')
+        }
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [activeRefreshing, modal, refreshActive, runWindowAction, selectRange, selectView, view])
+
+  const metric = view === 'tokens' ? 'tokens' : 'cost'
+  return (
+    <div className="app-shell">
+      <TopBar provider={provider} range={range} view={view} refreshing={activeRefreshing}
+        onProvider={setProvider} onRange={selectRange} onView={selectView} onRefresh={refreshActive}
+        onPrices={() => setModal({ kind: 'prices' })} onAccounts={() => setModal({ kind: 'accounts' })}
+        onWindow={(action) => void runWindowAction(action)} />
+      <main className="app-scroll">
+        <div className="usage-container">
+          {(windowError || (view !== 'limits' && failed)) && (
+            <div className="inline-notice notice-error" role="alert">
+              {windowError && <p>{windowError}</p>}
+              {view !== 'limits' && failed && <div className="flex flex-wrap items-center gap-3">
+                <p>{summary ? '无法更新用量，仍显示上次读取的数据。' : '无法读取用量。'}</p>
+                <button type="button" className="action-button" onClick={refresh}>重试</button>
+              </div>}
+            </div>
+          )}
+          {view === 'limits' ? <LimitsView report={limits.report} provider={provider} loading={limits.loading}
+            refreshing={limits.refreshing} failed={limits.failed} onRefresh={limits.refresh} /> :
+            summary && query ? <CostTokenView summary={summary} query={query} metric={metric} provider={provider}
+              pending={pending} onModel={(model) => setModal({ kind: 'model', model })} /> :
+              pending ? <UsageSkeleton /> : null}
+        </div>
+      </main>
+      {modal?.kind === 'model' && summary && query && (
+        <UsageModelDialog model={modal.model} buckets={summary.buckets} query={query} provider={provider} metric={metric}
+          onClose={() => setModal(null)} onPrice={() => setModal({ kind: 'prices', model: modal.model.model })} />
+      )}
+      {modal?.kind === 'prices' && (
+        <PriceOverridesDialog initialModel={modal.model} models={seenModels} onClose={() => setModal(null)}
+          onSaved={() => { setModal(null); reprice() }} />
+      )}
+      {modal?.kind === 'accounts' && <AccountsDialog onClose={() => setModal(null)} onChanged={refresh} />}
+    </div>
+  )
+}
+
+function UsageSkeleton() {
+  return (
+    <div className="usage-overview" aria-busy="true">
+      <p role="status" className="sr-only">正在读取用量</p>
+      <div className="usage-hero" aria-hidden="true">
+        <div className="usage-overview-side">
+          <div className="space-y-2"><div className="skeleton h-10 w-32" /><div className="skeleton h-3 w-24" /></div>
+          {[0, 1, 2, 3].map((index) => <div key={index} className="space-y-2">
+            <div className="skeleton h-3 w-3/4" /><div className="skeleton h-2.5 w-1/2" />
+          </div>)}
+        </div>
+        <div className="flex flex-col gap-3">
+          <div className="skeleton h-4 w-20" />
+          <div className="skeleton skeleton-chart" />
+        </div>
+      </div>
+      <section>
+        <h2 className="section-title">总计</h2>
+        <div className="totals-grid mt-2" aria-hidden="true">
+          {[0, 1, 2, 3, 4].map((index) => <div key={index} className="space-y-2">
+            <div className="skeleton h-3 w-16" /><div className="skeleton h-5 w-14" />
+          </div>)}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+const root = document.getElementById('root')
+if (root) createRoot(root).render(<App />)
