@@ -48,7 +48,11 @@ export function registerIpc(
     if (result) limits.accountsChanged(result.accounts)
     return result
   }
-  ipcMain.handle(usageChannels.limits, event => { ownWindow(event); return limits.get() })
+  ipcMain.handle(usageChannels.limits, async event => {
+    ownWindow(event)
+    await limits.ready
+    return limits.get()
+  })
   ipcMain.handle(usageChannels.refreshLimits, event => { ownWindow(event); return limits.refresh() })
   ipcMain.handle(usageChannels.accounts, event => { ownWindow(event); return accounts.list() })
   ipcMain.handle(usageChannels.addAccount, async (event, input: unknown) => {

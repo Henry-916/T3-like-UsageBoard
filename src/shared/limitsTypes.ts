@@ -12,13 +12,15 @@ export interface LimitWindow {
   modelIds?: string[]
 }
 
+export type LimitFailureReason = 'expired' | 'cli_missing' | 'failed'
+
 export type LimitsProbeResult = {
   kind: 'ok'
   windows: LimitWindow[]
   fingerprint?: string
   plan?: string
   resetCredits?: number
-} | { kind: 'unsupported' } | { kind: 'failed' }
+} | { kind: 'unsupported' } | { kind: 'failed'; reason?: LimitFailureReason }
 
 export interface LimitsProbeContext {
   signal: AbortSignal
@@ -41,8 +43,18 @@ export interface LimitAccountReading {
   previous?: { checkedAt: string; windows: LimitWindow[] }
 }
 
+export interface LimitAccountIssue {
+  id: string
+  provider: UsageProviderKind
+  displayName: string
+  origin: AccountOrigin
+  reason: LimitFailureReason
+  cached: boolean
+}
+
 export interface LimitsReport {
   accounts: LimitAccountReading[]
+  issues?: LimitAccountIssue[]
   checkedAt: string | null
   refreshing: boolean
 }

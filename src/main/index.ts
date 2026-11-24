@@ -8,7 +8,9 @@ import { createTray } from './tray'
 import { createUsageClient } from './usage/client'
 import { createAccountService } from './accounts/service'
 import { createLimitsService } from './limits/service'
-import { probeAntigravity } from './limits/probes/antigravity'
+import { createAntigravityProbe, waitForAntigravityRenewals } from './limits/probes/antigravity'
+import { createAntigravityTokenCache } from './limits/antigravityTokenCache'
+import { readConfig } from './configStore'
 import { probeClaude } from './limits/probes/claude'
 import { probeCodex } from './limits/probes/codex'
 import { probeOpenCode } from './limits/probes/opencode'
@@ -74,6 +76,11 @@ if (!app.requestSingleInstanceLock()) {
     const fallbackRates = join(app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'resources'), 'fallback-rates.json')
     const userData = app.getPath('userData')
     const usage = createUsageClient(userData, fallbackRates)
+    const encrypt = async (text: string) => {
+      if (!await safeStorage.isAsyncEncryptionAvailable()) throw new Error('Credential encryption is unavailable')
+      return safeStorage.encryptStringAsync(text)
+    }
+    const decrypt = async (bytes: Buffer) => (await safeStorage.decryptStringAsync(bytes)).result
     const accounts = createAccountService({
       userData,
       async pickDirectory() {
@@ -86,23 +93,36 @@ if (!app.requestSingleInstanceLock()) {
         const result = await dialog.showOpenDialog(panel, { title: '选择 Antigravity 凭证文件', properties: ['openFile'] })
         return result.canceled ? undefined : result.filePaths[0]
       },
-      encrypt: async text => {
-        if (!await safeStorage.isAsyncEncryptionAvailable()) throw new Error('Credential encryption is unavailable')
-        return safeStorage.encryptStringAsync(text)
-      },
-      decrypt: async bytes => (await safeStorage.decryptStringAsync(bytes)).result
+      encrypt,
+      decrypt
+    })
+    const antigravity = createAntigravityProbe({
+      tokenCache: createAntigravityTokenCache({ userData, encrypt, decrypt }),
+      getScanT3: async () => (await readConfig(userData)).scanT3
     })
     const limits = createLimitsService({
+      userData,
       discover: accounts.listInternal,
       readCredential: accounts.readCredential,
       getManualApiKey: accounts.getManualApiKey,
-      probes: { antigravity: probeAntigravity, opencode: probeOpenCode, codex: probeCodex, claude: probeClaude },
+      probes: { antigravity, opencode: probeOpenCode, codex: probeCodex, claude: probeClaude },
       onUpdate: (report) => {
         if (panel && !panel.webContents.isDestroyed()) panel.webContents.send(usageChannels.limitsUpdated, report)
       }
     })
     app.on('will-quit', usage.stop)
-    app.on('will-quit', limits.stop)
+    let cleanup: Promise<void> | undefined
+    let cleaned = false
+    app.on('before-quit', event => {
+      if (cleaned) return
+      event.preventDefault()
+      if (cleanup) return
+      limits.stop()
+      cleanup = waitForAntigravityRenewals().finally(() => {
+        cleaned = true
+        app.quit()
+      })
+    })
     registerIpc(() => panel, userData, usage.getSummary, accounts, limits)
     createPanel()
     tray = createTray(trayIconPath, userData, {

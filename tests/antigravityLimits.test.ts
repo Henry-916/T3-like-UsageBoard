@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto'
 import { expect, it, vi } from 'vitest'
-import { probeAntigravity } from '../src/main/limits/probes/antigravity'
+import {
+  createAntigravityProbe, probeAntigravity, waitForAntigravityRenewals, type CliRenewParams
+} from '../src/main/limits/probes/antigravity'
+import { antigravityTokenKey, createAntigravityTokenCache } from '../src/main/limits/antigravityTokenCache'
 import type { DiscoveredAccount } from '../src/shared/types'
 
 const account: DiscoveredAccount = {
@@ -124,9 +127,108 @@ it('does not send expired credentials or start after cancellation', async () => 
   const readCredential = vi.fn(async () => ({ token: { access_token: 'fake-expired', expiry: '2000-01-01T00:00:00Z' } }))
   expect(await probeAntigravity({ ...account, credentialPaths: ['antigravity-oauth-token'] }, {
     fetch, readCredential, signal: new AbortController().signal
-  })).toEqual({ kind: 'failed' })
+  })).toEqual({ kind: 'failed', reason: 'expired' })
   readCredential.mockClear()
   expect(await probeAntigravity(account, { fetch, readCredential, signal: AbortSignal.abort() })).toEqual({ kind: 'failed' })
   expect(fetch).not.toHaveBeenCalled()
   expect(readCredential).not.toHaveBeenCalled()
+})
+
+const cliAccount = { ...account, credentialPaths: ['synthetic-antigravity'] }
+const validUntil = '2099-01-01T00:00:00Z'
+const cliFixture = {
+  auth_method: 'oauth-business',
+  extra: 'synthetic-extra',
+  token: { access_token: 'synthetic-stale', refresh_token: 'synthetic-source', token_type: 'Bearer' }
+}
+const renewed = {
+  accessToken: 'synthetic-new', refreshToken: 'synthetic-rotated',
+  expiry: validUntil, updatedAt: Date.now()
+}
+const cliContext = (status: (token: string | null, url: string) => number = () => 200) => ({
+  readCredential: async () => cliFixture,
+  signal: new AbortController().signal,
+  fetch: vi.fn<typeof globalThis.fetch>(async (input, init) => {
+    const code = status(new Headers(init?.headers).get('authorization'), String(input))
+    return code === 200 ? Response.json({ buckets: [{ bucketId: 'gemini-weekly', remainingFraction: 0.5 }] })
+      : new Response(null, { status: code })
+  })
+})
+
+it('serializes across instances, double-checks the cache and skips canceled queued work', async () => {
+  const tokenCache = createAntigravityTokenCache()
+  const resolveCli = vi.fn(async () => 'synthetic-agy')
+  let complete!: () => void
+  const gate = new Promise<void>(resolve => { complete = resolve })
+  const renewCliToken = vi.fn(async (params: CliRenewParams) => {
+    expect(params).toMatchObject({
+      executable: 'synthetic-agy', authMethod: 'oauth-business', stored: cliFixture, refreshToken: 'synthetic-source'
+    })
+    await gate
+    return { kind: 'ok', token: renewed } as const
+  })
+  const deps = { tokenCache, resolveCli, renewCliToken, getScanT3: async () => false }
+  const probe = createAntigravityProbe(deps)
+  const first = probe(cliAccount, cliContext())
+  await vi.waitFor(() => expect(renewCliToken).toHaveBeenCalledTimes(1))
+  expect(resolveCli).toHaveBeenCalledWith({ scanT3: false })
+  const next = createAntigravityProbe(deps)(cliAccount, cliContext())
+  const controller = new AbortController()
+  const canceled = probe({ ...cliAccount, credentialPaths: ['other-synthetic-account'] },
+    { ...cliContext(), signal: controller.signal })
+  controller.abort()
+  expect(await canceled).toEqual({ kind: 'failed' })
+  let drained = false
+  const drain = waitForAntigravityRenewals().then(() => { drained = true })
+  await Promise.resolve()
+  expect(drained).toBe(false)
+  complete()
+  await drain
+  expect(await first).toMatchObject({ kind: 'ok' })
+  expect(await next).toMatchObject({ kind: 'ok' })
+  expect(await probe(cliAccount, cliContext())).toMatchObject({ kind: 'ok' })
+  expect(renewCliToken).toHaveBeenCalledTimes(1)
+})
+
+it('renews rejected cached access once and keeps the rotated refresh token through transient errors', async () => {
+  const tokenCache = createAntigravityTokenCache()
+  const key = await antigravityTokenKey(cliAccount.credentialPaths[0], cliFixture.token.refresh_token)
+  await tokenCache.set(key, renewed)
+  const renewCliToken = vi.fn<(params: CliRenewParams) => Promise<{ kind: 'failed' | 'expired' }>>()
+    .mockResolvedValueOnce({ kind: 'failed' }).mockResolvedValueOnce({ kind: 'expired' })
+  const probe = createAntigravityProbe({ tokenCache, resolveCli: async () => 'synthetic-agy', renewCliToken })
+  expect(await probe(cliAccount, cliContext(() => 401))).toEqual({ kind: 'failed' })
+  expect(renewCliToken).toHaveBeenCalledTimes(1)
+  expect(renewCliToken.mock.calls[0][0].refreshToken).toBe(renewed.refreshToken)
+  expect(await tokenCache.getValid(key)).toBeUndefined()
+  expect((await tokenCache.getEntry(key))?.refreshToken).toBe(renewed.refreshToken)
+  expect(await probe(cliAccount, cliContext(() => 401))).toEqual({ kind: 'failed', reason: 'expired' })
+  expect(await tokenCache.getEntry(key)).toBeUndefined()
+})
+
+it('retries quotas with new access after all 401s but not mixed endpoint failures', async () => {
+  const renewCliToken = vi.fn(async () => ({ kind: 'ok', token: renewed } as const))
+  const probe = createAntigravityProbe({ resolveCli: async () => 'synthetic-agy', renewCliToken })
+  const readCredential = async () => ({ ...cliFixture, token: { ...cliFixture.token, expiry: validUntil } })
+  expect(await probe(cliAccount, { ...cliContext((_token, url) => url.includes('daily-') ? 403 : 401), readCredential }))
+    .toEqual({ kind: 'failed' })
+  expect(renewCliToken).not.toHaveBeenCalled()
+  expect(await probe(cliAccount, { ...cliContext(token => token === 'Bearer synthetic-new' ? 200 : 401), readCredential }))
+    .toMatchObject({ kind: 'ok' })
+  expect(renewCliToken).toHaveBeenCalledTimes(1)
+})
+
+it('reports unavailable native CLI without fetching stale credentials', async () => {
+  const ctx = cliContext()
+  const probe = createAntigravityProbe({ resolveCli: async () => undefined })
+  expect(await probe(cliAccount, ctx)).toEqual({ kind: 'failed', reason: 'cli_missing' })
+  expect(ctx.fetch).not.toHaveBeenCalled()
+})
+
+it('maps the stored consumer auth label to ACP oauth-personal without rewriting the credential', async () => {
+  const renewCliToken = vi.fn(async (_params: CliRenewParams) => ({ kind: 'ok', token: renewed } as const))
+  const probe = createAntigravityProbe({ resolveCli: async () => 'synthetic-agy', renewCliToken })
+  const stored = { ...cliFixture, auth_method: 'consumer' }
+  expect(await probe(cliAccount, { ...cliContext(), readCredential: async () => stored })).toMatchObject({ kind: 'ok' })
+  expect(renewCliToken.mock.calls[0][0]).toMatchObject({ authMethod: 'oauth-personal', stored })
 })

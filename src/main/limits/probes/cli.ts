@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { access, constants, open, readdir, realpath, stat } from 'node:fs/promises'
+import { access, constants, lstat, open, readFile, readdir, realpath, stat } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { z } from 'zod'
 import type { DiscoveredAccount } from '../../../shared/types'
 
 export function credentialCandidates(account: DiscoveredAccount): string[] {
@@ -94,16 +95,20 @@ async function nativeWindowsExecutable(path: string): Promise<string | undefined
     if (!target.toLowerCase().endsWith('.exe') || !(await stat(target)).isFile()) return
     if (!await safeCliDirectory(dirname(target))) return
     // Claude's npm wrapper can ship a text placeholder at bin/claude.exe until postinstall runs.
-    const file = await open(target, 'r')
-    try {
-      const header = Buffer.alloc(64)
-      if ((await file.read(header, 0, header.length, 0)).bytesRead !== header.length ||
-          header.toString('ascii', 0, 2) !== 'MZ') return
-      const offset = header.readUInt32LE(60)
-      if (offset < header.length) return
-      if ((await file.read(header, 0, 4, offset)).bytesRead === 4 && header.readUInt32LE(0) === 0x4550) return target
-    } finally { await file.close() }
+    if (await hasPeHeader(target)) return target
   } catch { /* missing or unreadable candidate */ }
+}
+
+async function hasPeHeader(path: string): Promise<boolean> {
+  const file = await open(path, 'r')
+  try {
+    const header = Buffer.alloc(64)
+    if ((await file.read(header, 0, header.length, 0)).bytesRead !== header.length ||
+        header.toString('ascii', 0, 2) !== 'MZ') return false
+    const offset = header.readUInt32LE(60)
+    return offset >= header.length && (await file.read(header, 0, 4, offset)).bytesRead === 4 &&
+      header.readUInt32LE(0) === 0x4550
+  } finally { await file.close() }
 }
 
 async function packageExecutable(root: string, command: 'codex' | 'claude', arch: string) {
@@ -171,6 +176,123 @@ export async function resolveWindowsCli(command: 'codex' | 'claude', env: NodeJS
       }
     }
   }
+}
+
+export interface ResolveAgyOptions {
+  scanT3?: boolean
+  home?: string
+  env?: NodeJS.ProcessEnv
+  platform?: NodeJS.Platform
+  arch?: string
+}
+
+const releaseIdSchema = z.string().length(64).regex(/^[a-f0-9]{64}$/)
+const activeAgyRelease = z.object({ releaseId: releaseIdSchema })
+const installedAgyRelease = z.object({
+  releaseId: releaseIdSchema,
+  executable: z.object({
+    name: z.string(),
+    bytes: z.number().refine(bytes => Number.isSafeInteger(bytes) && bytes > 0)
+  })
+})
+
+function agyPathKey(path: string, windows: boolean) {
+  return windows ? resolve(path).toLowerCase() : resolve(path)
+}
+
+function agyPathWithin(root: string, path: string, windows: boolean) {
+  const child = relative(agyPathKey(root, windows), agyPathKey(path, windows))
+  return child === '' || (child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child))
+}
+
+async function resolveManagedAgy(home: string, platform: NodeJS.Platform, arch: string) {
+  if (!/^[a-z0-9]+$/u.test(arch) || !/^[a-z0-9]+$/u.test(platform)) return
+  const windows = platform === 'win32'
+  const root = join(home, '.t3', 'userdata', 'tools', 'antigravity-acp', `${platform}-${arch}`)
+  const versions = join(root, 'versions')
+  const name = windows ? 'agy.exe' : 'antigravity'
+  // Check the full ancestry, not just the resolved leaf: even in-tree junctions are rejected.
+  async function plainEntry(path: string, directory: boolean) {
+    const entry = await lstat(path)
+    if (entry.isSymbolicLink() || !(directory ? entry.isDirectory() : entry.isFile()) ||
+        agyPathKey(await realpath(path), windows) !== agyPathKey(path, windows)) throw new Error()
+    return entry
+  }
+  async function readRecord(path: string): Promise<unknown> {
+    if ((await plainEntry(path, false)).size > 8192) throw new Error()
+    return JSON.parse(await readFile(path, 'utf8'))
+  }
+  try {
+    const ancestry = [root]
+    while (dirname(ancestry[0]) !== ancestry[0]) ancestry.unshift(dirname(ancestry[0]))
+    for (const dir of ancestry) await plainEntry(dir, true)
+    const { releaseId } = activeAgyRelease.parse(await readRecord(join(root, 'active.json')))
+    const release = join(versions, releaseId)
+    if (!agyPathWithin(versions, release, windows)) return
+    await plainEntry(versions, true)
+    await plainEntry(release, true)
+    const installed = installedAgyRelease.parse(await readRecord(join(release, '.install-complete.json')))
+    if (installed.releaseId !== releaseId || installed.executable.name !== name) return
+    const executable = join(release, name)
+    if ((await plainEntry(executable, false)).size !== installed.executable.bytes) return
+    if (windows) {
+      if (!await hasPeHeader(executable)) return
+    } else await access(executable, constants.X_OK)
+    return executable
+  } catch { /* absent or invalid managed runtime */ }
+}
+
+export function resolveWindowsAgyCli(options: Omit<ResolveAgyOptions, 'platform'> = {}) {
+  return resolveAgyCli({ ...options, platform: 'win32' })
+}
+
+export async function resolveAgyCli({
+  home = homedir(), env = process.env, platform = process.platform, arch = process.arch, scanT3
+}: ResolveAgyOptions = {}): Promise<string | undefined> {
+  if (!isAbsolute(home)) return
+  const windows = platform === 'win32'
+  const getEnv = (key: string) => env[key] ?? (windows
+    ? Object.entries(env).find(([name]) => name.toUpperCase() === key)?.[1]
+    : undefined)
+  const canonicalOrSelf = (path: string) => realpath(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return path
+    throw error
+  })
+  const localAppData = getEnv('LOCALAPPDATA') || join(home, 'AppData', 'Local')
+  const t3Roots = [...new Set([home, homedir()].map(dir => join(dir, '.t3')))]
+  const pnpmHomes = windows ? [getEnv('PNPM_HOME'), join(localAppData, 'pnpm')]
+    .filter((dir): dir is string => !!dir && isAbsolute(dir)) : []
+  const excluded = [...t3Roots, ...pnpmHomes]
+  let excludedRoots: string[]
+  try {
+    excludedRoots = [...excluded, ...await Promise.all(excluded.map(canonicalOrSelf))]
+  } catch { return undefined }
+  async function external(path: string) {
+    if (excludedRoots.some(root => agyPathWithin(root, path, windows))) return
+    try {
+      const target = await realpath(path)
+      if (excludedRoots.some(root => agyPathWithin(root, target, windows))) return
+      if (windows) return await nativeWindowsExecutable(target)
+      if (!(await stat(target)).isFile()) return
+      await access(target, constants.X_OK)
+      return target
+    } catch { /* try the next candidate */ }
+  }
+  const names = windows ? ['agy.exe', 'antigravity.exe'] : ['agy', 'antigravity']
+  const dirs = (getEnv('PATH') ?? '').split(windows ? ';' : ':').map(dir => dir.replace(/^"|"$/g, ''))
+  for (const dir of dirs) {
+    if (!isAbsolute(dir)) continue
+    for (const name of names) {
+      const installed = await external(join(dir, name))
+      if (installed) return installed
+    }
+  }
+  if (windows && isAbsolute(localAppData)) {
+    const installed = await external(join(localAppData, 'agy', 'bin', 'agy.exe'))
+    if (installed) return installed
+  }
+  const installed = await external(join(home, '.local', 'bin', names[0]))
+  return installed ?? (scanT3 === false ? undefined : resolveManagedAgy(home, platform, arch))
 }
 
 type Exchange<T> = (frame: Record<string, unknown>, send: (frame: object) => void) => T | undefined

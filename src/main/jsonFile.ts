@@ -6,11 +6,15 @@ export async function readJson(file: string): Promise<unknown> {
   return JSON.parse((await readFile(file, 'utf8')).replace(/^\uFEFF/, '')) as unknown
 }
 
-export async function writeJsonAtomic(file: string, value: unknown): Promise<void> {
+export function writeJsonAtomic(file: string, value: unknown): Promise<void> {
+  return writeFileAtomic(file, JSON.stringify(value))
+}
+
+export async function writeFileAtomic(file: string, value: string | Buffer): Promise<void> {
   const temporary = `${file}.${randomUUID()}.tmp`
   await mkdir(dirname(file), { recursive: true })
   try {
-    await writeFile(temporary, JSON.stringify(value), { flag: 'wx', mode: 0o600 })
+    await writeFile(temporary, value, { flag: 'wx', mode: 0o600 })
     await rename(temporary, file)
   } finally {
     await rm(temporary, { force: true }).catch(() => undefined)

@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, realpath, rm, rmdir, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, realpath, rename, rm, rmdir, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { resolveWindowsCli } from '../src/main/limits/probes/cli'
+import { resolveAgyCli, resolveWindowsAgyCli, resolveWindowsCli } from '../src/main/limits/probes/cli'
 
 describe('Windows CLI resolution', () => {
   let root: string
@@ -84,5 +84,101 @@ describe('Windows CLI resolution', () => {
       await link(install, join(global, 'hash'))
     }
     expect(await resolveWindowsCli('codex', env, 'arm64')).toBe(native)
+  })
+
+  const releaseId = 'a'.repeat(64)
+
+  async function managedFixture(platform = 'win32') {
+    const home = await realpath(root)
+    const managed = join(home, '.t3', 'userdata', 'tools', 'antigravity-acp', `${platform}-x64`)
+    const release = join(managed, 'versions', releaseId)
+    const filename = platform === 'win32' ? 'agy.exe' : 'antigravity'
+    const binary = platform === 'win32'
+      ? await executable(release, filename)
+      : await write(join(release, filename), '#!/bin/sh\n')
+    const active = join(managed, 'active.json')
+    const manifest = join(release, '.install-complete.json')
+    const metadata = { releaseId, version: '1.0.0', executable: { name: filename, bytes: platform === 'win32' ? 68 : 10 } }
+    await write(active, JSON.stringify({ releaseId }))
+    await write(manifest, JSON.stringify(metadata))
+    return { home, managed, release, binary, active, manifest, metadata, options: { home, env: {}, arch: 'x64' } }
+  }
+
+  it('prefers Windows PATH variants, then official native install paths', async () => {
+    const home = join(root, 'user')
+    const path = join(root, 'path with spaces')
+    const pnpm = join(root, 'pnpm')
+    const pnpmAlias = join(root, 'pnpm alias')
+    const local = join(home, 'AppData', 'Local')
+    const options = { home, env: { Path: `relative;"${pnpmAlias}";"${join(local, 'pnpm')}";"${path}"`,
+      Pnpm_Home: pnpm }, scanT3: false }
+    await executable(pnpm, 'agy.exe')
+    await link(pnpm, pnpmAlias)
+    await executable(local, 'pnpm', 'agy.exe')
+    await write(join(path, 'agy.cmd'), '@echo off')
+    await write(join(path, 'agy.exe'), 'MZ invalid')
+    const userBin = await executable(home, '.local', 'bin', 'agy.exe')
+    expect(await resolveWindowsAgyCli(options)).toBe(userBin)
+    const official = await executable(local, 'agy', 'bin', 'agy.exe')
+    expect(await resolveWindowsAgyCli(options)).toBe(official)
+    const alternate = await executable(path, 'antigravity.exe')
+    expect(await resolveWindowsAgyCli(options)).toBe(alternate)
+    const agy = await executable(path, 'agy.exe')
+    expect(await resolveWindowsAgyCli(options)).toBe(agy)
+  })
+
+  it('allows only the active managed binary, as an opt-out fallback', async () => {
+    const { binary, home, release, options } = await managedFixture()
+    const alias = join(root, 'alias')
+    await link(release, alias)
+    expect(await resolveWindowsAgyCli({ ...options, arch: 'arm64' })).toBeUndefined()
+    expect(await resolveWindowsAgyCli({ ...options, env: { PATH: `${release};${alias}` }, scanT3: false })).toBeUndefined()
+    expect(await resolveWindowsAgyCli(options)).toBe(binary)
+    const native = await executable(home, '.local', 'bin', 'agy.exe')
+    expect(await resolveWindowsAgyCli(options)).toBe(native)
+  })
+
+  it('rejects malformed pointers, inconsistent install records and invalid PE data', async () => {
+    const { active, binary, manifest, metadata, options } = await managedFixture()
+    for (const releaseId of ['../outside', 'A'.repeat(64), `${metadata.releaseId}\n`]) {
+      await write(active, JSON.stringify({ releaseId }))
+      expect(await resolveWindowsAgyCli(options)).toBeUndefined()
+    }
+    await write(active, JSON.stringify({ releaseId }))
+    for (const record of [
+      { ...metadata, releaseId: 'b'.repeat(64) },
+      { ...metadata, executable: { name: '../agy.exe', bytes: 68 } },
+      ...[0, 1.5, Number.MAX_SAFE_INTEGER + 1, 67].map(bytes => ({ ...metadata, executable: { name: 'agy.exe', bytes } }))
+    ]) {
+      await write(manifest, JSON.stringify(record))
+      expect(await resolveWindowsAgyCli(options)).toBeUndefined()
+    }
+    await write(manifest, JSON.stringify(metadata))
+    await write(binary, Buffer.alloc(68))
+    expect(await resolveWindowsAgyCli(options)).toBeUndefined()
+  })
+
+  it.each(['.t3', 'userdata', 'tools', 'antigravity-acp', 'win32-x64', 'versions', releaseId])(
+    'rejects linked managed ancestry at %s', async segment => {
+      const { release, options } = await managedFixture()
+      let dir = release
+      while (dirname(dir) !== dir && dir !== join(dirname(dir), segment)) dir = dirname(dir)
+      expect(dir).toBe(join(dirname(dir), segment))
+      const target = join(root, 'redirect')
+      await rename(dir, target)
+      await link(target, dir)
+      expect(await resolveWindowsAgyCli(options)).toBeUndefined()
+    }
+  )
+
+  it.skipIf(process.platform === 'win32')('requires POSIX execute permission and the managed antigravity basename', async () => {
+    const { binary, options } = await managedFixture('linux')
+    expect(await resolveAgyCli({ ...options, platform: 'linux' })).toBeUndefined()
+    await chmod(binary, 0o700)
+    expect(await resolveAgyCli({ ...options, platform: 'linux' })).toBe(binary)
+    const path = join(root, 'bin')
+    const external = await write(join(path, 'antigravity'), '#!/bin/sh\n')
+    await chmod(external, 0o700)
+    expect(await resolveAgyCli({ ...options, platform: 'linux', env: { PATH: path } })).toBe(external)
   })
 })

@@ -1,9 +1,27 @@
-import type { AccountOrigin } from '../shared/limitsTypes'
+import type { AccountOrigin, LimitAccountIssue } from '../shared/limitsTypes'
+import { providerInfo, type ProviderFilter } from './usagePresentation'
 
 export const accountOriginLabels: Record<AccountOrigin, string> = {
   native: '原生',
   t3: 'T3',
   manual: '手动'
+}
+
+export function visibleLimitIssues(issues: readonly LimitAccountIssue[] | undefined, provider: ProviderFilter) {
+  if (!issues) return []
+  return provider === 'all' ? issues : issues.filter((issue) => issue.provider === provider)
+}
+
+export function limitIssueText(issue: LimitAccountIssue) {
+  const account = `「${issue.displayName}」`
+  switch (issue.reason) {
+    case 'expired':
+      return `${account}登录凭证已过期，请在 ${providerInfo[issue.provider].label} 中重新登录后重试`
+    case 'cli_missing':
+      return `${account}登录凭证已过期，未找到可用的 agy CLI`
+    case 'failed':
+      return `${account}${issue.cached ? '刷新失败，当前显示缓存数据' : '无法读取额度'}`
+  }
 }
 
 const dateTimeFormat = new Intl.DateTimeFormat('zh-CN', {

@@ -2,7 +2,7 @@ import { Clock3, Gauge, RotateCcw, Ticket, TrendingDown, TrendingUp } from 'luci
 import { useEffect, useId, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import type { LimitsReport } from '../../shared/limitsTypes'
 import { poolUsageLimits, type PooledLimitWindow } from '../../shared/usageLimits'
-import { accountOriginLabels, formatLimitPercent, limitDateTime, resetCountdown } from '../limitsPresentation'
+import { accountOriginLabels, formatLimitPercent, limitDateTime, limitIssueText, resetCountdown, visibleLimitIssues } from '../limitsPresentation'
 import { providerInfo, providers, type ProviderFilter } from '../usagePresentation'
 import { ProviderMark } from './ProviderMark'
 
@@ -27,6 +27,8 @@ export function LimitsView({ report, provider, loading, refreshing, failed, onRe
   const sections = available.map((value) => ({
     provider: value, windows: pools.filter((pool) => pool.provider === value && pool.accounts.length > 0)
   })).filter((section) => section.windows.length > 0)
+  const visibleIssues = visibleLimitIssues(report?.issues, provider)
+  const showIssues = !failed && visibleIssues.length > 0
 
   return (
     <section aria-label="限制" className="limits-view">
@@ -36,6 +38,20 @@ export function LimitsView({ report, provider, loading, refreshing, failed, onRe
           <button type="button" className="action-button" disabled={refreshing} onClick={onRefresh}>重试</button>
         </div>
       )}
+      <div className={showIssues ? 'inline-notice' : 'sr-only'}>
+        <div className="flex flex-wrap items-center gap-3">
+          <div role="status" className="min-w-0 wrap-anywhere">
+            {showIssues && (
+              <ul role="list" className="grid gap-1">
+                {visibleIssues.map((issue) => <li key={issue.id}>{limitIssueText(issue)}</li>)}
+              </ul>
+            )}
+          </div>
+          {showIssues && (
+            <button type="button" className="action-button" disabled={refreshing} onClick={onRefresh}>重试</button>
+          )}
+        </div>
+      </div>
       {sections.length === 0 && (loading || refreshing ? (
         <div className="limits-loading" role="status">
           <span className="sr-only">正在读取额度</span>
@@ -43,7 +59,7 @@ export function LimitsView({ report, provider, loading, refreshing, failed, onRe
           <div aria-hidden="true" className="skeleton h-24 w-full" />
           <div aria-hidden="true" className="skeleton h-24 w-full" />
         </div>
-      ) : !failed && <p className="view-placeholder">暂无可用额度</p>)}
+      ) : !failed && visibleIssues.length === 0 && <p className="view-placeholder">暂无可用额度</p>)}
       {sections.map((section) => (
         <section key={section.provider} aria-labelledby={`limits-${section.provider}`} className="limits-provider">
           <h2 id={`limits-${section.provider}`} className="section-title limits-provider-heading">

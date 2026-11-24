@@ -1,5 +1,6 @@
 import type { LimitsProbeContext, LimitsProbeResult, LimitWindow } from '../../../shared/limitsTypes'
 import type { DiscoveredAccount } from '../../../shared/types'
+import { APP_VERSION } from '../../../shared/version'
 import { clamp, cliEnvironment, credentialCandidates, exchangeCli, fingerprint, iso, number, record, resolveCli, safeCliHome, text } from './cli'
 
 const BASE = 'https://chatgpt.com/backend-api/wham'
@@ -64,7 +65,7 @@ async function fromCli(
   let step = 1
   return await exchangeCli<LimitsProbeResult>(
     executable, ['app-server'], cliEnvironment('CODEX_HOME', dataDir), ctx.signal,
-    { id: 1, method: 'initialize', params: { clientInfo: { name: 'usage-dashboard', version: '0.1.0' } } },
+    { id: 1, method: 'initialize', params: { clientInfo: { name: 'usage-dashboard', version: APP_VERSION } } },
     (frame, send) => {
       if (frame.id !== step) return
       const result = record(frame.result)
