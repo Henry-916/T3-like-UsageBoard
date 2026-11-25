@@ -1,6 +1,6 @@
 const allowedHosts = new Set([
   'accounts.google.com', 'auth.openai.com', 'chatgpt.com',
-  'claude.ai', 'console.anthropic.com', 'github.com'
+  'claude.ai', 'claude.com', 'platform.claude.com', 'console.anthropic.com', 'github.com'
 ])
 
 export function validateExternalUrl(raw: string): URL {

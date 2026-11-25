@@ -142,7 +142,6 @@ if (!app.requestSingleInstanceLock()) {
     const login = createAccountLoginManager({
       userData,
       getScanT3: async () => (await readConfig(userData)).scanT3,
-      openExternal,
       onUpdate: state => {
         if (panel && !panel.webContents.isDestroyed()) panel.webContents.send(usageChannels.accountLoginUpdated, state)
       },

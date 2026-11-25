@@ -1,9 +1,12 @@
-import { Pencil, Plus, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
+import { Check, ChevronDown, LoaderCircle, Pencil, Plus, Trash2 } from 'lucide-react'
+import {
+  useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent
+} from 'react'
 import type { AccountLoginState, AccountView } from '../../shared/limitsTypes'
 import type { UsageProviderKind } from '../../shared/types'
 import { createAccountLoginSession, loginFailureMessage, loginInProgress } from '../accountLoginSession'
 import { useAccountsData } from '../hooks/useAccountsData'
+import { useAuthorizationCopy } from '../hooks/useAuthorizationCopy'
 import type { UpdateControls } from '../hooks/useUpdates'
 import { accountOriginLabels } from '../limitsPresentation'
 import { updateActionLabel, updateStatusLabel, versionLabel } from '../updatePresentation'
@@ -29,6 +32,11 @@ export function AccountsDialog({ onClose, onChanged, updates }: {
   const list = useRef<HTMLUListElement>(null)
   const locked = loading || busy || loginActive || loginSnapshot.cancelling
   const showAdd = adding || loginActive
+  const updateStatus = updates.state?.status
+  const updating = updateStatus === 'checking' || updateStatus === 'downloading'
+  const updateResult = updates.feedback?.text ?? (
+    updating || updateStatus === 'available' || updateStatus === 'downloaded' ? updateStatusLabel(updates.state) : ''
+  )
 
   useEffect(() => login.connect(), [login])
 
@@ -145,15 +153,15 @@ export function AccountsDialog({ onClose, onChanged, updates }: {
         )}
       </div>
       <footer className="dialog-footer accounts-dialog-footer">
-        <span role="status" className="sr-only">{updates.feedback?.text ??
-          (updates.state?.status === 'downloading' ? '正在下载更新' : updateStatusLabel(updates.state))}</span>
+        <span role="status" className="sr-only">{updateStatus === 'downloading' ? '正在下载更新' : updateResult}</span>
         <p className={updates.feedback?.error ? 'accounts-error' : undefined}>
           {[
             versionLabel(updates.state?.currentVersion),
-            updates.feedback?.text ?? updateStatusLabel(updates.state)
+            updateResult
           ].filter(Boolean).join(' · ')}
         </p>
         <button type="button" className="action-button" disabled={updates.disabled} onClick={() => void updates.run()}>
+          {updating && <LoaderCircle size={13} className="motion-safe:animate-spin" aria-hidden="true" />}
           {updateActionLabel(updates.state, 'footer')}
         </button>
       </footer>
@@ -230,6 +238,138 @@ function AccountRow({ account, busy, editing, setEditing, onToggle, onRename, on
   )
 }
 
+function placeProviderMenu(menu: HTMLDivElement, trigger: HTMLButtonElement) {
+  if (!menu.matches(':popover-open')) return
+  const anchor = trigger.getBoundingClientRect()
+  const scroller = trigger.closest('.dialog-body')?.getBoundingClientRect()
+  if (scroller && (anchor.bottom <= scroller.top || anchor.top >= scroller.bottom)) {
+    menu.hidePopover()
+    return
+  }
+  menu.style.width = `${anchor.width}px`
+  if (CSS.supports('position-area: block-end span-inline-end') && CSS.supports('position-try-fallbacks: flip-block')) return
+
+  const edge = 8
+  const gap = 6
+  const below = Math.max(0, window.innerHeight - edge - anchor.bottom - gap)
+  const above = Math.max(0, anchor.top - gap - edge)
+  const height = menu.scrollHeight + 2
+  const flip = height > below && above > below
+  menu.style.maxHeight = `${flip ? above : below}px`
+  const box = menu.getBoundingClientRect()
+  menu.style.left = `${Math.max(edge, Math.min(anchor.left, window.innerWidth - box.width - edge))}px`
+  menu.style.top = `${Math.max(edge, flip ? anchor.top - gap - box.height : anchor.bottom + gap)}px`
+}
+
+function ProviderSelect({ value, disabled, onChange }: {
+  value: UsageProviderKind
+  disabled: boolean
+  onChange: (provider: UsageProviderKind) => void
+}) {
+  const labelId = useId()
+  const valueId = useId()
+  const menuId = useId()
+  const trigger = useRef<HTMLButtonElement>(null)
+  const menu = useRef<HTMLDivElement>(null)
+  const initialItem = useRef<number | null>(null)
+  const [open, setOpen] = useState(false)
+  const [activeItem, setActiveItem] = useState(providers.indexOf(value))
+
+  useLayoutEffect(() => {
+    if (disabled && menu.current?.matches(':popover-open')) menu.current.hidePopover()
+  }, [disabled])
+
+  useEffect(() => {
+    if (!open || !trigger.current || !menu.current) return
+    const button = trigger.current
+    const panel = menu.current
+    const scroller = button.closest('.dialog-body')
+    const reposition = () => placeProviderMenu(panel, button)
+    window.addEventListener('resize', reposition)
+    scroller?.addEventListener('scroll', reposition, { passive: true })
+    return () => {
+      window.removeEventListener('resize', reposition)
+      scroller?.removeEventListener('scroll', reposition)
+    }
+  }, [open])
+
+  function focusItem(index: number) {
+    menu.current?.querySelectorAll<HTMLButtonElement>('[role="option"]')[index]?.focus()
+  }
+
+  function closeMenu() {
+    menu.current?.hidePopover()
+    trigger.current?.focus()
+  }
+
+  function handleTriggerKey(event: KeyboardEvent<HTMLButtonElement>) {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+    event.preventDefault()
+    const index = event.key === 'ArrowDown' ? 0 : providers.length - 1
+    if (menu.current?.matches(':popover-open')) focusItem(index)
+    else {
+      initialItem.current = index
+      event.currentTarget.click()
+    }
+  }
+
+  function handleListKey(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === 'Tab') {
+      closeMenu()
+      return
+    }
+    let index: number
+    switch (event.key) {
+      case 'ArrowDown': index = (activeItem + 1) % providers.length; break
+      case 'ArrowUp': index = (activeItem + providers.length - 1) % providers.length; break
+      case 'Home': index = 0; break
+      case 'End': index = providers.length - 1; break
+      default: return // Enter and Space use the option button's native activation.
+    }
+    event.preventDefault()
+    focusItem(index)
+  }
+
+  return (
+    <div className="provider-select" onKeyDownCapture={(event) => {
+      if (event.key !== 'Escape' || !menu.current?.matches(':popover-open')) return
+      event.preventDefault()
+      event.stopPropagation()
+      closeMenu()
+    }}>
+      <span id={labelId}>提供方</span>
+      <button ref={trigger} type="button" className="price-field provider-select-trigger" autoFocus disabled={disabled}
+        popoverTarget={menuId} aria-haspopup="listbox" aria-controls={menuId} aria-expanded={open}
+        aria-labelledby={`${labelId} ${valueId}`} onKeyDown={handleTriggerKey}>
+        <ProviderMark provider={value} className="size-4 shrink-0" />
+        <span id={valueId}>{providerInfo[value].label}</span>
+        <ChevronDown size={14} aria-hidden="true" />
+      </button>
+      <div ref={menu} id={menuId} className="provider-select-menu" popover="auto" role="listbox"
+        aria-labelledby={labelId} onKeyDown={handleListKey} onToggle={(event) => {
+          const panel = event.currentTarget
+          const button = trigger.current
+          const opened = panel.matches(':popover-open')
+          setOpen(opened)
+          if (opened && button) {
+            placeProviderMenu(panel, button)
+            if (panel.matches(':popover-open')) focusItem(initialItem.current ?? providers.indexOf(value))
+          }
+          initialItem.current = null
+        }}>
+        {providers.map((entry, index) => (
+          <button key={entry} type="button" role="option" aria-selected={entry === value} tabIndex={activeItem === index ? 0 : -1}
+            onFocus={() => setActiveItem(index)} onClick={() => { closeMenu(); onChange(entry) }}>
+            <ProviderMark provider={entry} className="size-4 shrink-0" />
+            <span>{providerInfo[entry].label}</span>
+            {entry === value && <Check size={14} aria-hidden="true" />}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function AddAccountForm({ busy, onCancel, login, snapshot, addKey }: {
   busy: boolean
   onCancel: () => void
@@ -248,11 +388,12 @@ function AddAccountForm({ busy, onCancel, login, snapshot, addKey }: {
   const waitingCode = state.phase === 'waiting_code'
   const waitingBrowser = state.phase === 'waiting_browser'
   const verifying = state.phase === 'verifying' || submitting
-  const showBrowserLink = (waitingBrowser || waitingCode) && Boolean(state.authorizationUrl)
+  const authorizationUrl = waitingBrowser || waitingCode ? state.authorizationUrl : null
+  const { copied, copyAuthorization } = useAuthorizationCopy(authorizationUrl, state.flowId)
   const formError = error || (state.phase === 'failed' ? loginFailureMessage(state) : '') || linkError
   const status = cancelling ? '正在取消登录…' : verifying ? '正在保存凭证…'
-    : waitingBrowser ? '请在打开的浏览器窗口中完成授权'
-      : waitingCode ? '在浏览器中完成授权后，粘贴授权码。'
+    : waitingBrowser ? '请在浏览器打开上方链接完成授权'
+      : waitingCode ? '完成浏览器授权后，在下方粘贴授权码'
         : state.phase === 'starting' ? '正在启动登录…'
           : state.phase === 'cancelled' ? '登录已取消。' : ''
 
@@ -292,10 +433,10 @@ function AddAccountForm({ busy, onCancel, login, snapshot, addKey }: {
   }
 
   async function openAuthorization() {
-    if (cancelling || !state.authorizationUrl) return
+    if (cancelling || verifying || !authorizationUrl) return
     setLinkError('')
     try {
-      await window.usageApi.openExternalUrl(state.authorizationUrl)
+      await window.usageApi.openExternalUrl(authorizationUrl)
     } catch {
       const current = login.getSnapshot().state
       if (current.phase === state.phase && current.flowId === state.flowId) setLinkError('无法打开授权页面，请重试。')
@@ -305,15 +446,11 @@ function AddAccountForm({ busy, onCancel, login, snapshot, addKey }: {
   return (
     <form className="account-add-form" onSubmit={onSubmit} autoComplete="off">
       <div className="account-add-grid">
-        <label>提供方
-          <select className="price-field" value={provider} autoFocus disabled={busy || active || cancelling} onChange={(event) => {
-            setSelected(event.currentTarget.value as UsageProviderKind)
-            setLinkError('')
-            login.clearFeedback()
-          }}>
-            {providers.map((provider) => <option key={provider} value={provider}>{providerInfo[provider].label}</option>)}
-          </select>
-        </label>
+        <ProviderSelect value={provider} disabled={busy || active || cancelling} onChange={(next) => {
+          setSelected(next)
+          setLinkError('')
+          login.clearFeedback()
+        }} />
         <label>显示名（选填）
           <input className="price-field" name="displayName" maxLength={120} disabled={busy || active || cancelling}
             placeholder={providerInfo[provider].label} />
@@ -323,6 +460,25 @@ function AddAccountForm({ busy, onCancel, login, snapshot, addKey }: {
         <input ref={keyField} className="price-field" type="password" autoComplete="off"
           spellCheck={false} maxLength={8192} required disabled={busy} />
       </label>}
+      {authorizationUrl && <div className="login-link">
+        <div className="login-link-label">
+          <span>授权链接</span>
+          <span role="status">{copied ? '已复制链接' : '点击输入框复制'}</span>
+        </div>
+        <div className="login-url-row">
+          <input className="price-field login-url-input" type="text" readOnly value={authorizationUrl}
+            aria-label="授权链接，点击复制" title="点击复制授权链接"
+            onClick={() => void copyAuthorization()}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                if (!event.repeat) void copyAuthorization()
+              }
+            }} />
+          <button className="action-button" type="button" disabled={cancelling || verifying}
+            onClick={() => void openAuthorization()}>打开</button>
+        </div>
+      </div>}
       <p role="status" className={status ? 'account-login-status' : 'sr-only'}>{status}</p>
       {waitingCode && <label>授权码
         <input ref={codeField} className="price-field" type="password" autoComplete="off" spellCheck={false}
@@ -330,8 +486,6 @@ function AddAccountForm({ busy, onCancel, login, snapshot, addKey }: {
       </label>}
       {formError && <p className="accounts-error" role="alert">{formError}</p>}
       <div className="flex flex-wrap justify-end gap-2">
-        {showBrowserLink && <button className="action-button" type="button" disabled={cancelling || verifying}
-          onClick={() => void openAuthorization()}>{waitingCode ? '重新打开链接' : '打开授权页面'}</button>}
         <button ref={cancelButton} className="action-button" type="button" disabled={busy || cancelling} onClick={onCancel}>取消</button>
         {!waitingBrowser && <button className="action-button primary-action" type="submit"
           disabled={busy || cancelling || verifying || state.phase === 'starting' || state.phase === 'succeeded'}>

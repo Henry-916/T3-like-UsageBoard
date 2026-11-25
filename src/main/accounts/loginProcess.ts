@@ -16,14 +16,15 @@ const claudeHostPaths = new Set([
 ])
 
 export function claudeLoginEnvironment(root: string): NodeJS.ProcessEnv {
-  // Claude launches the browser itself. Keep its host paths while isolating Claude's credentials.
+  // Keep Claude's host paths while isolating credentials and suppressing its browser launch.
   return {
     ...Object.fromEntries(Object.entries(process.env).filter(([key]) => {
       const name = key.toUpperCase()
       return allowedEnvironment.has(name) || claudeHostPaths.has(name)
     })),
     CLAUDE_CONFIG_DIR: root,
-    DISABLE_AUTOUPDATER: '1'
+    DISABLE_AUTOUPDATER: '1',
+    BROWSER: '__USAGE_DASHBOARD_NO_BROWSER__'
   }
 }
 

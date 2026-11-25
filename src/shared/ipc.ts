@@ -27,6 +27,7 @@ export const usageChannels = {
   cancelAccountLogin: 'usage:cancel-account-login',
   accountLoginUpdated: 'usage:account-login-updated',
   openExternalUrl: 'usage:open-external-url',
+  copyText: 'usage:copy-text',
   getUpdateState: 'usage:get-update-state',
   checkForUpdates: 'usage:check-for-updates',
   downloadUpdate: 'usage:download-update',
@@ -63,6 +64,7 @@ export interface UsageApi {
   cancelAccountLogin(flowId: string): Promise<AccountLoginState>
   onAccountLoginUpdated(listener: (state: AccountLoginState) => void): () => void
   openExternalUrl(url: string): Promise<void>
+  copyText(text: string): Promise<void>
   getUpdateState(): Promise<UpdateState>
   checkForUpdates(): Promise<UpdateState>
   downloadUpdate(): Promise<UpdateState>

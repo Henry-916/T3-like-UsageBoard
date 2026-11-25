@@ -5,6 +5,7 @@ export interface UpdateState {
   mode: UpdateMode
   currentVersion: string
   status: UpdateStatus
+  manual?: boolean
   latestVersion?: string
   downloadPercent?: number
   downloadedFile?: string

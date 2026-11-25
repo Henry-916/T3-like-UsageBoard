@@ -120,7 +120,7 @@ export function createUpdater(options: UpdaterOptions = {}) {
   let check: Promise<UpdateState> | undefined
   let download: Promise<UpdateState> | undefined
   let install: Promise<void> | undefined
-  let silentCheck = false
+  let manualCheck = false
   let stopped = false
   let activeFetch: AbortController | undefined
   let cancelNsisDownload: (() => void) | undefined
@@ -133,11 +133,15 @@ export function createUpdater(options: UpdaterOptions = {}) {
     return { ...state }
   }
 
+  function setCheckState(status: UpdateStatus, details: Partial<UpdateState> = {}) {
+    return setState(status, { ...details, manual: manualCheck })
+  }
+
   function checkError(error: unknown) {
-    if (silentCheck) return setState('idle')
+    if (!manualCheck) return setCheckState('idle')
     return isMissingRelease(error)
-      ? setState('up-to-date', { message: noRelease })
-      : setState('error', { message: checkFailed })
+      ? setCheckState('up-to-date', { message: noRelease })
+      : setCheckState('error', { message: checkFailed })
   }
 
   async function nsisUpdater() {
@@ -156,10 +160,10 @@ export function createUpdater(options: UpdaterOptions = {}) {
       if (mode === 'development') updater.forceDevUpdateConfig = true
     }
     updater.on('checking-for-update', () => {
-      if (state.status !== 'checking') setState('checking')
+      if (state.status !== 'checking') setCheckState('checking')
     })
     updater.on('update-available', info => setState('available', { latestVersion: info.version }))
-    updater.on('update-not-available', () => setState('up-to-date'))
+    updater.on('update-not-available', () => setCheckState('up-to-date'))
     updater.on('download-progress', progress => {
       if (state.status === 'downloading') {
         setState('downloading', { ...state, downloadPercent: Math.min(100, Math.max(0, Math.round(progress.percent))) })
@@ -200,7 +204,7 @@ export function createUpdater(options: UpdaterOptions = {}) {
       const release = await response.json()
       const version = release.tag_name
       if (typeof version !== 'string') throw new Error('Missing release version')
-      if (release.draft || compareSemver(version, currentVersion) <= 0) return setState('up-to-date')
+      if (release.draft || compareSemver(version, currentVersion) <= 0) return setCheckState('up-to-date')
       asset = Array.isArray(release.assets)
         ? release.assets.map((candidate: unknown) => portableAsset(candidate, override)).find(Boolean)
         : undefined
@@ -215,24 +219,27 @@ export function createUpdater(options: UpdaterOptions = {}) {
 
   function checkForUpdates(silent = false): Promise<UpdateState> {
     if (check) {
-      if (!silent) silentCheck = false
+      if (!silent && !manualCheck) {
+        manualCheck = true
+        if (state.status === 'checking') setCheckState('checking', state)
+      }
       return check
     }
     if (stopped || download || state.status === 'downloaded' || (silent && state.status === 'available')) {
       return Promise.resolve({ ...state })
     }
     if (mode === 'development' && !override) {
-      return Promise.resolve(silent ? { ...state } : setState('idle', { message: '当前为开发模式，请使用打包版本检查更新' }))
+      return Promise.resolve(silent ? { ...state } : setState('idle', { manual: true, message: '当前为开发模式，请使用打包版本检查更新' }))
     }
-    silentCheck = silent
+    manualCheck = !silent
     check = Promise.resolve().then(async () => {
       if (stopped) return { ...state }
       asset = undefined
-      setState('checking')
+      setCheckState('checking')
       try {
         if (mode === 'portable') return await checkPortable()
         const updater = await nsisUpdater()
-        if (!stopped && !await updater.checkForUpdates() && state.status === 'checking') return setState('idle')
+        if (!stopped && !await updater.checkForUpdates() && state.status === 'checking') return setCheckState('idle')
         return { ...state }
       } catch (error) {
         return checkError(error)

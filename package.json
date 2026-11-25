@@ -1,6 +1,6 @@
 {
   "name": "usage-dashboard",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "独立的 Windows AI 用量看板",
   "license": "MIT",

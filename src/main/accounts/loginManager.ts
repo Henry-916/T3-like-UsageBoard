@@ -4,6 +4,7 @@ import { lstat, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative } from 'node:path'
 import { createInterface } from 'node:readline'
+import { stripVTControlCharacters } from 'node:util'
 import type { AccountLoginState, StartAccountLoginInput } from '../../shared/limitsTypes'
 import { APP_VERSION } from '../../shared/version'
 import { cliToken } from '../limits/probes/agyRenewal'
@@ -16,7 +17,6 @@ type Credential = { filename: string; text: string }
 interface LoginOptions {
   userData: string
   getScanT3(): boolean | Promise<boolean>
-  openExternal(url: string): Promise<void> | void
   onUpdate(state: AccountLoginState): void
   commitAccount(account: { id: string; provider: Provider; displayName?: string; dataDir?: string }, credential?: Credential): Promise<void>
   version?: string
@@ -31,7 +31,7 @@ interface LoginOptions {
 const providers = {
   antigravity: ['Antigravity', 'agy', ['accounts.google.com']],
   codex: ['Codex', 'codex', ['auth.openai.com', 'chatgpt.com']],
-  claude: ['Claude Code', 'claude', ['claude.ai', 'console.anthropic.com']]
+  claude: ['Claude Code', 'claude', ['claude.ai', 'claude.com', 'platform.claude.com', 'console.anthropic.com']]
 } as const
 const callback = 'https://antigravity.google/oauth-callback'
 const failure = '登录未完成，请重试。'
@@ -135,16 +135,10 @@ export function createAccountLoginManager(options: LoginOptions) {
         }
         finish(false)
       }
-      function showAuth(url: URL, phase: 'waiting_browser' | 'waiting_code', autoOpen: boolean) {
+      function showAuth(url: URL, phase: 'waiting_browser' | 'waiting_code') {
         authShown = true
         const safeUrl = url.toString()
         publish(flow, phase, null, safeUrl)
-        if (autoOpen) {
-          // Retain the manual open button if the desktop browser cannot be launched.
-          void Promise.resolve().then(() => {
-            if (!signal.aborted && !finished) return options.openExternal(safeUrl)
-          }).catch(() => {})
-        }
       }
       function line(raw: string) {
         if (finished || signal.aborted || raw.length > 65536) return
@@ -162,7 +156,7 @@ export function createAccountLoginManager(options: LoginOptions) {
             const id = text(result?.loginId)
             if (message.error || result?.type !== 'chatgpt' || !url || !id) return finish(false)
             loginId = id
-            showAuth(url, 'waiting_browser', true)
+            showAuth(url, 'waiting_browser')
           } else if (message.method === 'account/login/completed' && loginId) {
             const params = record(message.params)
             if (params && (params.loginId === undefined || params.loginId === loginId)) finish(params.success === true)
@@ -170,7 +164,7 @@ export function createAccountLoginManager(options: LoginOptions) {
           return
         }
         if (authShown) return
-        for (const match of raw.matchAll(/https:\/\/[^\s<>"'`]+/g)) {
+        for (const match of stripVTControlCharacters(raw).matchAll(/https:\/\/[^\s<>"'`]+/g)) {
           const url = authorizationUrl(match[0], provider)
           if (!url) continue
           if (provider === 'antigravity') {
@@ -180,8 +174,8 @@ export function createAccountLoginManager(options: LoginOptions) {
               states.length !== 1 || !/^[^\s\u0000-\u001f\u007f]{1,512}$/.test(states[0])) continue
             flow.pendingState = states[0]
             flow.submit = value => { child.stdin.write(`${value}\n`) }
-            showAuth(url, 'waiting_code', true)
-          } else showAuth(url, 'waiting_browser', false)
+            showAuth(url, 'waiting_code')
+          } else showAuth(url, 'waiting_browser')
           break
         }
       }

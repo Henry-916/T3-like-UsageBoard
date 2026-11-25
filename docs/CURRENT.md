@@ -31,9 +31,10 @@
   - [usage/service.ts](../src/main/usage/service.ts)：`native` 与启用 `scanT3` 下的 `t3` 数据目录（含无凭证历史目录与已隐藏账号目录）**始终参与历史费用与 Token 扫描**，对齐 T3 统计口径；仅被显式关闭的 `manual` 目录跳过历史扫描。
   - [limits/service.ts](../src/main/limits/service.ts)：「限制」页实时额度探测严格尊重过滤后的启用状态。
 - **应用内隔离登录（[loginManager.ts](../src/main/accounts/loginManager.ts)）**：
+  - 「添加账号 → 提供方」采用自绘深色 `ProviderSelect` 下拉组件，选项与触发器均展示对应 `<ProviderMark />` 品牌图标（按 `Esc` 仅收起下拉而不关闭「账号管理」弹窗）；「浏览器登录」仅返回授权链接、**绝不自动拉起系统浏览器**，前端经主进程 `clipboard.writeText` 自动复制链接并在弹窗内展示只读可点击复制输入框（2 秒 `已复制链接` 提示）与显式 `打开` 按钮。
   - `Antigravity`：调用本机/托管 `agy acp --login`（强制 `SSH_CONNECTION` 与独立 `GEMINI_HOME`），经授权码回填后由 `safeStorage` 加密写入 `accounts/<id>/`；
   - `Codex`：调用 `codex -c cli_auth_credentials_store="file" app-server` 在隔离 `profiles/<id>/`（`CODEX_HOME`）完成 ChatGPT OAuth；
-  - `Claude Code`：保留宿主浏览器及用户临时目录环境变量，通过 `CLAUDE_CONFIG_DIR` 隔离完成 `claude auth login --claudeai`；
+  - `Claude Code`：保留宿主浏览器及用户临时目录环境变量、注入 `BROWSER: '__USAGE_DASHBOARD_NO_BROWSER__'` 抑制 CLI 自动打开浏览器并放行 `claude.ai` / `claude.com` / `platform.claude.com` / `console.anthropic.com`，通过 `CLAUDE_CONFIG_DIR` 隔离完成 `claude auth login --claudeai`；
   - `OpenCode`：应用内输入 Go API Key 并经 `safeStorage` 加密存储。
 - **模型归一化与计价**：先执行 `normalizeModelId`（剥离思考强度后缀并映射 Antigravity 路由模型），再按 `providerReportedCost > priceOverrides > LiteLLM (24h 缓存 + 离线兜底) > unpriced` 计价；美元统一输出 `US$`。
 
@@ -47,7 +48,7 @@
   - 「使用重置」仅先收起浮层并打开独立的 `使用重置券？` 二次确认弹窗，**默认聚焦「取消」防回车误触**；服务端具备 HTTP 直连优先 + 非 T3 CLI 回退、跨账号别名串行互斥锁、粘性 `idempotencyKey` 防重放及兑换后退避重查。
 
 ### 2.4 应用更新与分发（[updater.ts](../src/main/updater.ts)）
-- **发布源与触发策略**：通过公开 GitHub Releases（当前配置 `Henry-916/UsageDashboard`）检查新版本；打包后启动延迟 `10s` 首检并每 `4h` 静默复检（404 / 离线静默忽略，仅在有新版/下载中/就绪时在顶栏显示胶囊）；设置菜单、账号管理页脚与系统托盘菜单均提供手动检查、下载与安装入口。
+- **发布源与触发策略**：通过公开 GitHub Releases（当前配置 `Henry-916/UsageDashboard`）检查新版本；打包后启动延迟 `10s` 首检并每 `4h` 静默复检（404 / 离线及无新版静默忽略，仅在有新版/下载中/就绪时在顶栏显示胶囊）；设置菜单、账号管理页脚与系统托盘菜单均提供手动检查（`manual: true`）、下载与安装入口——手动检查期间在固定顶栏（[TopBar.tsx](../src/renderer/components/TopBar.tsx)）展示 `LoaderCircle` 旋转胶囊（`正在检查…`）并在页脚按钮显示 `检查中…`，无新版/失败提示渲染于固定顶栏 `.titlebar-update-feedback` 胶囊（不随页面滚动、`4s` 自动收起且支持 `×` 手动关闭）。
 - **安装版（NSIS）与便携版（Portable）双通道**：
   - **安装版**：接入 `electron-updater`（`autoDownload = false`），安装前经 [index.ts](../src/main/index.ts) `prepareQuitForUpdate()` 协调关闭到托盘状态、清理登录与续期任务并销毁托盘后再调用 `quitAndInstall(false, true)`；
   - **便携版**：直接请求 GitHub Releases API 校验语义版本与可信下载域名，以独占 `.part` 句柄流式下载至系统「下载」目录并校验字节数后原子重命名，最后定位至资源管理器。
@@ -71,5 +72,6 @@
 | 003 | `v0.3.0` | [003-v0.3.0-ui-alignment.md](specs/003-v0.3.0-ui-alignment.md) | 6 张参考图 1:1 视觉与交互对齐、Codex 重置券兑换与二次确认 |
 | 004 | `v0.3.1` | [004-v0.3.1-polish.md](specs/004-v0.3.1-polish.md) | 历史扫描与开关解耦、窗口最大化/还原按钮、Antigravity 图标与额度分组排序 |
 | 005 | `v0.4.0` | [005-v0.4.0-auth-and-updates.md](specs/005-v0.4.0-auth-and-updates.md) | 精准识别本机已登录凭证、账号删除/隐藏、应用内隔离登录与 GitHub Releases 检查更新 |
+| 006 | `v0.4.1` | [006-v0.4.1-ux-refinements.md](specs/006-v0.4.1-ux-refinements.md) | 检查更新微动画与固定顶栏胶囊、登录链接自动复制与免自动弹窗、提供方图标下拉 |
 
 > 后续每轮新需求在 `docs/specs/` 下按 `NNN-vX.Y.Z-<slug>.md` 递增新建；合入并完成版本发布后，如改变了全局默认行为，同步更新本页对应条目。

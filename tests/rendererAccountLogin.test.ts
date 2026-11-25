@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AccountLoginState } from '../src/shared/limitsTypes'
 import { createAccountLoginSession, loginFailureMessage } from '../src/renderer/accountLoginSession'
+import { copyAuthorizationLink } from '../src/renderer/hooks/useAuthorizationCopy'
 
 function state(phase: AccountLoginState['phase'], flowId = 'flow'): AccountLoginState {
   return { phase, flowId, provider: 'antigravity', authorizationUrl: null, message: null }
@@ -117,5 +118,35 @@ describe('renderer login session', () => {
     expect(loginFailureMessage({ ...state('failed'), message: '登录已超时，请重试。' })).toBe('登录已超时，请重试。')
     const missing = '未检测到 Antigravity CLI（agy），请先安装 Antigravity 后再登录。'
     expect(loginFailureMessage({ ...state('failed'), message: missing })).toBe(missing)
+  })
+})
+
+describe('renderer authorization clipboard', () => {
+  it('shares one auto-copy promise across effect replay and repeated pushes without blocking explicit copies', async () => {
+    const url = 'https://example.test/authorize'
+    const ref = { current: null }
+    const copyText = vi.fn().mockResolvedValue(undefined)
+    const automatic = copyAuthorizationLink(ref, copyText, url, `flow:${url}`)
+    expect(copyAuthorizationLink(ref, copyText, url, `flow:${url}`)).toBe(automatic)
+    await automatic
+    expect(copyAuthorizationLink(ref, copyText, url, `flow:${url}`)).toBe(automatic)
+    expect(copyText).toHaveBeenCalledExactlyOnceWith(url)
+    await copyAuthorizationLink(ref, copyText, url)
+    await copyAuthorizationLink(ref, copyText, url)
+    expect(copyText).toHaveBeenCalledTimes(3)
+  })
+
+  it('permits a fresh auto-copy for a new flow or URL and an explicit retry after failure', async () => {
+    const url = 'https://example.test/authorize'
+    const replacement = 'https://example.test/authorize/new'
+    const ref = { current: null }
+    const copyText = vi.fn().mockRejectedValueOnce(new Error('Clipboard unavailable')).mockResolvedValue(undefined)
+    const failed = copyAuthorizationLink(ref, copyText, url, `first:${url}`)
+    await expect(failed).rejects.toThrow('Clipboard unavailable')
+    expect(copyAuthorizationLink(ref, copyText, url, `first:${url}`)).toBe(failed)
+    await copyAuthorizationLink(ref, copyText, url)
+    await copyAuthorizationLink(ref, copyText, url, `second:${url}`)
+    await copyAuthorizationLink(ref, copyText, replacement, `second:${replacement}`)
+    expect(copyText.mock.calls).toEqual([[url], [url], [url], [replacement]])
   })
 })

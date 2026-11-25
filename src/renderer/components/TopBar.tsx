@@ -1,8 +1,8 @@
-import { Check, ChevronDown, Minus, RefreshCw, Settings2, X } from 'lucide-react'
+import { Check, ChevronDown, LoaderCircle, Minus, RefreshCw, Settings2, X } from 'lucide-react'
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { UsageProviderKind } from '../../shared/types'
 import type { UpdateControls } from '../hooks/useUpdates'
-import { updateActionLabel } from '../updatePresentation'
+import { showUpdateCapsule, updateActionLabel } from '../updatePresentation'
 import { providerInfo, providers, ranges, type UsageRange, type UsageView } from '../usagePresentation'
 import { ProviderMark } from './ProviderMark'
 
@@ -47,9 +47,10 @@ function placePopover(panel: HTMLDivElement | null, trigger: HTMLButtonElement |
   panel.style.top = `${Math.max(edge, Math.min(top, window.innerHeight - height - edge))}px`
 }
 
-export function TopBar({ hiddenProviders, range, view, refreshing, maximized, updates, onHiddenProviders, onRange, onView, onRefresh, onPrices, onAccounts, onWindow }: {
+export function TopBar({ hiddenProviders, range, view, refreshing, maximized, updates, accountsOpen, onHiddenProviders, onRange, onView, onRefresh, onPrices, onAccounts, onWindow }: {
   hiddenProviders: readonly UsageProviderKind[]; range: UsageRange; view: UsageView; refreshing: boolean; maximized: boolean
   updates: UpdateControls
+  accountsOpen: boolean
   onHiddenProviders: (providers: UsageProviderKind[]) => void
   onRange: (range: UsageRange) => void
   onView: (view: UsageView) => void
@@ -74,7 +75,9 @@ export function TopBar({ hiddenProviders, range, view, refreshing, maximized, up
   const refreshLabel = view === 'limits' ? '刷新额度' : '刷新用量'
   const maximizeLabel = maximized ? '向下还原' : '最大化'
   const updateStatus = updates.state?.status
-  const showUpdate = updateStatus === 'available' || updateStatus === 'downloading' || updateStatus === 'downloaded'
+  const showUpdate = showUpdateCapsule(updates.state)
+  const updating = updateStatus === 'checking' || updateStatus === 'downloading'
+  const feedback = !showUpdate && !accountsOpen ? updates.feedback : null
 
   useEffect(() => {
     if (CSS.supports('position-area: block-end span-inline-end')) return
@@ -181,12 +184,25 @@ export function TopBar({ hiddenProviders, range, view, refreshing, maximized, up
         {view !== 'limits' && <Segmented label="时间范围" options={ranges} value={range} onChange={onRange} />}
         <Segmented label="用量视图" options={views} value={view} onChange={onView} />
         <div className="titlebar-tools">
-          <span role="status" className="sr-only">{showUpdate && (updateStatus === 'downloading'
-            ? '正在下载更新' : updateStatus === 'downloaded' ? '更新已下载' : updateActionLabel(updates.state, 'capsule'))}</span>
-          {showUpdate && <button type="button" className="action-button titlebar-update" disabled={updates.disabled}
-            onClick={() => void updates.run()}>
-            {updateActionLabel(updates.state, 'capsule')}
-          </button>}
+          <span role="status" className="sr-only">{!accountsOpen && (showUpdate
+            ? updateStatus === 'downloading' ? '正在下载更新' : updateStatus === 'downloaded'
+              ? '更新已下载' : updateActionLabel(updates.state, 'capsule')
+            : feedback?.text)}</span>
+          {showUpdate ? (
+            <button type="button" className="action-button titlebar-update" disabled={updates.disabled}
+              onClick={() => void updates.run()}>
+              {updating && <LoaderCircle size={13} className="motion-safe:animate-spin" aria-hidden="true" />}
+              <span>{updateActionLabel(updates.state, 'capsule')}</span>
+            </button>
+          ) : feedback && (
+            <div className={`titlebar-update-feedback${feedback.error ? ' is-error' : ''}`}>
+              <span title={feedback.text} aria-hidden="true">{feedback.text}</span>
+              <button type="button" aria-label="关闭更新提示" title="关闭更新提示" onClick={() => {
+                updates.dismissFeedback()
+                settingsTrigger.current?.focus()
+              }}><X size={12} aria-hidden="true" /></button>
+            </div>
+          )}
           <button type="button" className="icon-button" aria-label={refreshLabel} title={`${refreshLabel} (R)`}
             aria-busy={refreshing} disabled={refreshing} onClick={onRefresh}>
             <RefreshCw size={15} className={refreshing ? 'motion-safe:animate-spin' : undefined} aria-hidden="true" />

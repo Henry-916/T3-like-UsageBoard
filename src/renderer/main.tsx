@@ -1,4 +1,3 @@
-import { X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { UsageApi } from '../shared/ipc'
@@ -142,19 +141,12 @@ function App() {
   return (
     <div className="app-shell">
       <TopBar hiddenProviders={hiddenProviders} range={range} view={view} refreshing={activeRefreshing} maximized={maximized}
-        updates={updates}
+        updates={updates} accountsOpen={modal?.kind === 'accounts'}
         onHiddenProviders={selectHiddenProviders} onRange={selectRange} onView={selectView} onRefresh={refreshActive}
         onPrices={() => setModal({ kind: 'prices' })} onAccounts={() => setModal({ kind: 'accounts' })}
         onWindow={(action) => void runWindowAction(action)} />
       <main className="app-scroll">
         <div className="usage-container">
-          <div className={updates.feedback && !modal ? 'update-notice' : 'sr-only'}>
-            <p role="status">{!modal && updates.feedback?.text}</p>
-            {updates.feedback && !modal && <button className="icon-button" type="button"
-              aria-label="关闭更新提示" title="关闭更新提示" onClick={updates.dismissFeedback}>
-              <X size={14} aria-hidden="true" />
-            </button>}
-          </div>
           {(windowError || (view !== 'limits' && failed)) && (
             <div className="inline-notice notice-error" role="alert">
               {windowError && <p>{windowError}</p>}

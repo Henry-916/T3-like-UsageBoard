@@ -31,6 +31,7 @@ const usageApi: UsageApi = {
   submitAccountLoginCode: (id, code) => ipcRenderer.invoke(usageChannels.submitAccountLoginCode, id, code),
   cancelAccountLogin: id => ipcRenderer.invoke(usageChannels.cancelAccountLogin, id),
   openExternalUrl: url => ipcRenderer.invoke(usageChannels.openExternalUrl, url),
+  copyText: text => ipcRenderer.invoke(usageChannels.copyText, text),
   getUpdateState: () => ipcRenderer.invoke(usageChannels.getUpdateState),
   checkForUpdates: () => ipcRenderer.invoke(usageChannels.checkForUpdates),
   downloadUpdate: () => ipcRenderer.invoke(usageChannels.downloadUpdate),

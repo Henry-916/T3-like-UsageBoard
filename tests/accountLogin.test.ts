@@ -33,8 +33,9 @@ async function fixture(overrides: Partial<Parameters<typeof createAccountLoginMa
   const commitAccount = vi.fn<Parameters<typeof createAccountLoginManager>[0]['commitAccount']>(async () => {})
   const openExternal = vi.fn()
   const onUpdate = vi.fn()
+  // Supply the legacy callback as a tripwire for browser-launch regressions.
   const manager = createAccountLoginManager({
-    userData, tempDirectory: root, getScanT3: () => true, openExternal, onUpdate,
+    userData, tempDirectory: root, getScanT3: () => true, ...{ openExternal }, onUpdate,
     spawnProcess, resolveCli: resolveExecutable, resolveAgyCli: resolveExecutable, terminateProcess, commitAccount, ...overrides
   })
   managers.push(manager)
@@ -66,7 +67,7 @@ describe('mock account login', () => {
     f.child.stdout.write(`${url}&state=other\n${url.replace('accounts.google.com', 'github.com')}\n`)
     expect(f.manager.getState().phase).toBe('starting')
     f.child.stdout.write(`${url}\n${url}\n`)
-    await vi.waitFor(() => expect(f.openExternal).toHaveBeenCalledExactlyOnceWith(url))
+    expect(f.manager.getState()).toMatchObject({ phase: 'waiting_code', authorizationUrl: url })
     await expect(f.manager.submitCode(flowId!, 'mock\npayload')).rejects.toThrow('授权码或回调链接无效')
     await expect(f.manager.submitCode(flowId!, `${redirect}?state=other&code=mock`)).rejects.toThrow()
     expect(f.writes).toEqual([])
@@ -77,6 +78,7 @@ describe('mock account login', () => {
     await writeFile(join(acp, 'antigravity-oauth-token'), credential)
     f.child.emit('close', 0)
     await vi.waitFor(() => expect(f.manager.getState().phase).toBe('succeeded'))
+    expect(f.openExternal).not.toHaveBeenCalled()
     expect(f.commitAccount).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ provider: 'antigravity' }),
       { filename: 'antigravity-oauth-token', text: credential })
     expect(JSON.stringify(f.onUpdate.mock.calls)).not.toMatch(/mock-code|mock-secret/)
@@ -97,7 +99,7 @@ describe('mock account login', () => {
     expect(f.writes.map(raw => JSON.parse(raw).method)).toEqual(['initialize', 'initialized', 'account/login/start'])
     const url = 'https://auth.openai.com/oauth/authorize'
     f.line({ id: 2, result: { type: 'chatgpt', loginId: 'mock-id', authUrl: url } })
-    await vi.waitFor(() => expect(f.openExternal).toHaveBeenCalledExactlyOnceWith(url))
+    expect(f.manager.getState()).toMatchObject({ phase: 'waiting_browser', authorizationUrl: url })
     if (cancel) {
       await f.manager.cancel(flowId!)
       expect(f.writes.map(raw => JSON.parse(raw)).at(-1)).toMatchObject({
@@ -112,9 +114,14 @@ describe('mock account login', () => {
       expect(f.commitAccount).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ provider: 'codex', dataDir: cwd }), undefined)
       expect(await readFile(join(cwd, 'auth.json'), 'utf8')).toContain('mock-secret')
     }
+    expect(f.openExternal).not.toHaveBeenCalled()
   })
 
-  it.each([false, true])('uses the Claude browser once and verifies file credentials (valid=%s)', async valid => {
+  it.each([
+    { host: 'claude.ai', stream: 'stderr', valid: false },
+    { host: 'claude.com', stream: 'stdout', valid: true },
+    { host: 'platform.claude.com', stream: 'stderr', valid: true }
+  ] as const)('publishes a sanitized $host authorization URL without opening a browser', async ({ host, stream, valid }) => {
     const f = await fixture()
     const hostPaths = {
       HOME: 'C:\\host\\home', USERPROFILE: 'C:\\host\\profile',
@@ -131,17 +138,22 @@ describe('mock account login', () => {
     await f.manager.start({ provider: 'claude' })
     const [, args, cwd, env] = f.spawnProcess.mock.calls[0]
     expect(args).toEqual(['auth', 'login', '--claudeai'])
-    expect(env).toMatchObject({ ...hostPaths, CLAUDE_CONFIG_DIR: cwd, DISABLE_AUTOUPDATER: '1' })
+    expect(env).toMatchObject({
+      ...hostPaths, CLAUDE_CONFIG_DIR: cwd, DISABLE_AUTOUPDATER: '1',
+      BROWSER: '__USAGE_DASHBOARD_NO_BROWSER__'
+    })
     expect(Object.keys(env).some(name => /^ANTHROPIC_/i.test(name))).toBe(false)
     expect(env.CLAUDECODE).toBeUndefined()
     expect(env.ELECTRON_RUN_AS_NODE).toBeUndefined()
-    const url = 'https://claude.ai/oauth/authorize'
-    f.child.stderr.write(`${url}?login_hint=hidden%40example.test\n${url}\n`)
+    const url = `https://${host}/oauth/authorize`
+    f.child[stream].write(`\x1b[32m${url}?login_hint=hidden%40example.test\x1b[0m\n`)
+    expect(f.manager.getState().authorizationUrl).toBeNull()
+    f.child[stream].write(`\x1b[?25lOpen \x1b[1;32m${url}\x1b[0m\x1b[?25h\n`)
     expect(f.manager.getState().authorizationUrl).toBe(url)
-    expect(f.openExternal).not.toHaveBeenCalled()
     await writeFile(join(cwd, '.credentials.json'), valid ? '{"claudeAiOauth":{"refreshToken":"mock"}}' : '{}')
     f.child.emit('close', 0)
     await vi.waitFor(() => expect(f.manager.getState().phase).toBe(valid ? 'succeeded' : 'failed'))
+    expect(f.openExternal).not.toHaveBeenCalled()
     if (!valid) await expect(lstat(cwd)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 

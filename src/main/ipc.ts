@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { clipboard, ipcMain } from 'electron'
 import type { BrowserWindow, IpcMainInvokeEvent } from 'electron'
 import { usageChannels } from '../shared/ipc'
 import { pricingSettingsSchema, uiPreferencesSchema, usageSummaryInputSchema } from '../shared/types'
@@ -124,6 +124,11 @@ export function registerIpc(
     ownWindow(event)
     if (typeof url !== 'string' || url.length > 8192) throw new Error('链接无效。')
     return openExternal(url)
+  })
+  ipcMain.handle(usageChannels.copyText, (event, text: unknown) => {
+    ownWindow(event)
+    if (typeof text !== 'string' || text.length === 0 || text.length > 8192) throw new Error('无法复制此文本。')
+    clipboard.writeText(text)
   })
   ipcMain.handle(usageChannels.getUpdateState, event => { ownWindow(event); return updater.getState() })
   ipcMain.handle(usageChannels.checkForUpdates, event => { ownWindow(event); return updater.checkForUpdates() })

@@ -109,14 +109,41 @@ describe('NSIS updates', () => {
     expect(nsis.checkForUpdates).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1)
     expect(nsis.checkForUpdates).toHaveBeenCalledTimes(1)
-    expect(updater.getState().status).toBe('idle')
-    expect(await updater.checkForUpdates()).toMatchObject({ status, message })
+    expect(updater.getState()).toMatchObject({ status: 'idle', manual: false })
+    expect(await updater.checkForUpdates()).toMatchObject({ status, message, manual: true })
     await vi.advanceTimersByTimeAsync(4 * 60 * 60_000)
     expect(nsis.checkForUpdates).toHaveBeenCalledTimes(3)
-    expect(updater.getState().status).toBe('idle')
+    expect(updater.getState()).toMatchObject({ status: 'idle', manual: false })
     updater.stop()
     await vi.advanceTimersByTimeAsync(4 * 60 * 60_000)
     expect(nsis.checkForUpdates).toHaveBeenCalledTimes(3)
+  })
+
+  it('immediately broadcasts a manual upgrade to an in-flight silent check and shares its outcome', async () => {
+    const { nsis, autoUpdater } = mockNsis()
+    const onStateChanged = vi.fn()
+    const updater = createUpdater({ app: mockApp(), env: {}, autoUpdater, onStateChanged })
+    let markStarted!: () => void
+    const started = new Promise<void>(resolve => { markStarted = resolve })
+    let finishCheck!: () => void
+    const response = new Promise<void>(resolve => { finishCheck = resolve })
+    nsis.checkForUpdates.mockImplementation(async () => {
+      markStarted()
+      await response
+      nsis.emit('update-not-available')
+      return {}
+    })
+
+    const silent = updater.checkForUpdates(true)
+    await started
+    expect(onStateChanged).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'checking', manual: false }))
+    const manual = updater.checkForUpdates(false)
+    expect(manual).toBe(silent)
+    expect(onStateChanged).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'checking', manual: true }))
+    finishCheck()
+    expect(await manual).toMatchObject({ status: 'up-to-date', manual: true })
+    expect(onStateChanged).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'up-to-date', manual: true }))
+    expect(nsis.checkForUpdates).toHaveBeenCalledOnce()
   })
 
   it('only permits a loopback HTTP override for development checks', async () => {
@@ -125,7 +152,7 @@ describe('NSIS updates', () => {
       app: mockApp('', false), autoUpdater, env: { USAGE_DASHBOARD_UPDATE_URL: url }
     })
     const development = create('http://127.0.0.1.example.com/feed/')
-    expect(await development.checkForUpdates()).toMatchObject({ mode: 'development', status: 'idle' })
+    expect(await development.checkForUpdates()).toMatchObject({ mode: 'development', status: 'idle', manual: true })
     expect(nsis.setFeedURL).not.toHaveBeenCalled()
     expect(await create('http://127.0.0.1:9876/feed/').checkForUpdates()).toMatchObject({ status: 'available' })
     expect(nsis.setFeedURL).toHaveBeenCalledWith({ provider: 'generic', url: 'http://127.0.0.1:9876/feed/' })
