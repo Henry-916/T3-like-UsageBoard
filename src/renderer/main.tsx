@@ -1,3 +1,4 @@
+import { X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { UsageApi } from '../shared/ipc'
@@ -9,6 +10,7 @@ import { PriceOverridesDialog } from './components/PriceOverridesDialog'
 import { TopBar } from './components/TopBar'
 import { UsageModelDialog } from './components/UsageModelDialog'
 import { useLimitsData } from './hooks/useLimitsData'
+import { useUpdates } from './hooks/useUpdates'
 import { useUsageData } from './hooks/useUsageData'
 import { ranges, type UsageModel, type UsageRange, type UsageView } from './usagePresentation'
 import './styles/globals.css'
@@ -31,6 +33,7 @@ function App() {
   const maximizedRevision = useRef(0)
   const { summary, query, pending, refreshing, failed, refresh, reprice } = useUsageData(range)
   const limits = useLimitsData()
+  const updates = useUpdates()
   const activeRefreshing = view === 'limits' ? limits.refreshing : refreshing
   const refreshActive = view === 'limits' ? limits.refresh : refresh
   const seenModels = useMemo(() => [...new Set(summary?.buckets.map((bucket) => bucket.model))], [summary])
@@ -139,11 +142,19 @@ function App() {
   return (
     <div className="app-shell">
       <TopBar hiddenProviders={hiddenProviders} range={range} view={view} refreshing={activeRefreshing} maximized={maximized}
+        updates={updates}
         onHiddenProviders={selectHiddenProviders} onRange={selectRange} onView={selectView} onRefresh={refreshActive}
         onPrices={() => setModal({ kind: 'prices' })} onAccounts={() => setModal({ kind: 'accounts' })}
         onWindow={(action) => void runWindowAction(action)} />
       <main className="app-scroll">
         <div className="usage-container">
+          <div className={updates.feedback && !modal ? 'update-notice' : 'sr-only'}>
+            <p role="status">{!modal && updates.feedback?.text}</p>
+            {updates.feedback && !modal && <button className="icon-button" type="button"
+              aria-label="关闭更新提示" title="关闭更新提示" onClick={updates.dismissFeedback}>
+              <X size={14} aria-hidden="true" />
+            </button>}
+          </div>
           {(windowError || (view !== 'limits' && failed)) && (
             <div className="inline-notice notice-error" role="alert">
               {windowError && <p>{windowError}</p>}
@@ -168,7 +179,8 @@ function App() {
         <PriceOverridesDialog initialModel={modal.model} models={seenModels} onClose={() => setModal(null)}
           onSaved={() => { setModal(null); reprice() }} />
       )}
-      {modal?.kind === 'accounts' && <AccountsDialog onClose={() => setModal(null)} onChanged={refresh} />}
+      {modal?.kind === 'accounts' && <AccountsDialog updates={updates} onChanged={refresh}
+        onClose={() => { updates.dismissFeedback(); setModal(null) }} />}
     </div>
   )
 }

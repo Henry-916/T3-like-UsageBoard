@@ -1,7 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { usageChannels } from '../shared/ipc'
 import type { UsageApi } from '../shared/ipc'
-import type { LimitsReport } from '../shared/limitsTypes'
+import type { AccountLoginState, LimitsReport } from '../shared/limitsTypes'
+import type { UpdateState } from '../shared/updateTypes'
 
 const usageApi: UsageApi = {
   minimize: () => ipcRenderer.invoke(usageChannels.minimize),
@@ -23,6 +24,27 @@ const usageApi: UsageApi = {
   addManualAccount: input => ipcRenderer.invoke(usageChannels.addAccount, input),
   updateAccount: (id, changes) => ipcRenderer.invoke(usageChannels.updateAccount, id, changes),
   removeManualAccount: id => ipcRenderer.invoke(usageChannels.removeAccount, id),
+  removeAccount: id => ipcRenderer.invoke(usageChannels.removeAccount, id),
+  restoreHiddenAccounts: () => ipcRenderer.invoke(usageChannels.restoreHiddenAccounts),
+  getAccountLoginState: () => ipcRenderer.invoke(usageChannels.accountLoginState),
+  startAccountLogin: input => ipcRenderer.invoke(usageChannels.startAccountLogin, input),
+  submitAccountLoginCode: (id, code) => ipcRenderer.invoke(usageChannels.submitAccountLoginCode, id, code),
+  cancelAccountLogin: id => ipcRenderer.invoke(usageChannels.cancelAccountLogin, id),
+  openExternalUrl: url => ipcRenderer.invoke(usageChannels.openExternalUrl, url),
+  getUpdateState: () => ipcRenderer.invoke(usageChannels.getUpdateState),
+  checkForUpdates: () => ipcRenderer.invoke(usageChannels.checkForUpdates),
+  downloadUpdate: () => ipcRenderer.invoke(usageChannels.downloadUpdate),
+  installUpdate: () => ipcRenderer.invoke(usageChannels.installUpdate),
+  onAccountLoginUpdated(listener) {
+    const handler = (_event: unknown, state: AccountLoginState) => listener(state)
+    ipcRenderer.on(usageChannels.accountLoginUpdated, handler)
+    return () => ipcRenderer.removeListener(usageChannels.accountLoginUpdated, handler)
+  },
+  onUpdateStateChanged(listener) {
+    const handler = (_event: unknown, state: UpdateState) => listener(state)
+    ipcRenderer.on(usageChannels.updateStateChanged, handler)
+    return () => ipcRenderer.removeListener(usageChannels.updateStateChanged, handler)
+  },
   setScanT3: enabled => ipcRenderer.invoke(usageChannels.setScanT3, enabled),
   getUiPreferences: () => ipcRenderer.invoke(usageChannels.preferences),
   saveUiPreferences: changes => ipcRenderer.invoke(usageChannels.savePreferences, changes),

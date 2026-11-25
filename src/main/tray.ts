@@ -1,14 +1,17 @@
 import { isAbsolute } from 'node:path'
 import { app, Menu, Tray } from 'electron'
 import { updateConfig } from './configStore'
+import type { UpdateState } from '../shared/updateTypes'
 
 interface TrayActions {
   show(): void
   toggle(): void
   refresh(): void
+  updateState(): UpdateState
+  update(): void
 }
 
-export function createTray(iconPath: string, userData: string, actions: TrayActions): Tray {
+export function createTray(iconPath: string, userData: string, actions: TrayActions): Tray & { refreshMenu: () => void } {
   const tray = new Tray(iconPath)
   tray.setToolTip('UsageDashboard')
   tray.on('click', actions.toggle)
@@ -18,9 +21,18 @@ export function createTray(iconPath: string, userData: string, actions: TrayActi
   const args = process.defaultApp ? [`"${app.getAppPath()}"`, '--auto-launch'] : ['--auto-launch']
   const loginItem = { path, args }
   function updateMenu(): void {
+    if (tray.isDestroyed()) return
+    const state = actions.updateState()
+    const version = state.latestVersion ?? state.currentVersion
+    const updateLabel = state.status === 'checking' ? '正在检查更新…'
+      : state.status === 'available' ? `下载新版本 (v${version})`
+        : state.status === 'downloading' ? `正在下载更新 (${Math.round(state.downloadPercent ?? 0)}%)`
+          : state.status === 'downloaded' ? (state.mode === 'portable' ? `打开已下载的 v${version}` : `重启并安装 v${version}`)
+            : `检查更新 (v${state.currentVersion})`
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: '显示主面板', click: actions.show },
       { label: '立即刷新', click: actions.refresh },
+      { label: updateLabel, enabled: state.status !== 'downloading' && state.status !== 'checking', click: actions.update },
       {
         label: '开机自启',
         type: 'checkbox',
@@ -44,5 +56,5 @@ export function createTray(iconPath: string, userData: string, actions: TrayActi
   }
 
   updateMenu()
-  return tray
+  return Object.assign(tray, { refreshMenu: updateMenu })
 }

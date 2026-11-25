@@ -7,7 +7,7 @@ import type { AppConfig } from '../configStore'
 import { readT3Instances } from './t3Reader'
 
 export const providers = ['antigravity', 'opencode', 'codex', 'claude'] as const
-const names = { antigravity: 'Antigravity', opencode: 'OpenCode', codex: 'Codex', claude: 'Claude Code' }
+export const providerNames = { antigravity: 'Antigravity', opencode: 'OpenCode', codex: 'Codex', claude: 'Claude Code' }
 const credentials: Record<UsageProviderKind, string[]> = {
   antigravity: ['acp_token.json', 'antigravity-oauth-token'],
   opencode: ['auth.json'],
@@ -31,7 +31,7 @@ function locations(provider: UsageProviderKind, env: NodeJS.ProcessEnv, home: st
       const specified = splitDirs(env.ANTIGRAVITY_DATA_DIR)
       if (specified.length || !defaults) return specified
       return [
-        ...['antigravity', 'antigravity-cli', 'antigravity-ide', 'antigravity-backup'].map(name => join(home, '.gemini', name)),
+        ...['antigravity-acp', 'antigravity', 'antigravity-cli', 'antigravity-ide', 'antigravity-backup'].map(name => join(home, '.gemini', name)),
         join(home, '.config', 'antigravity')
       ]
     }
@@ -68,12 +68,12 @@ export async function discoverAccounts(
       seen.add(pathKey(dataDir))
       add({
         id: `native:${provider}:${createHash('sha256').update(pathKey(dataDir)).digest('hex').slice(0, 20)}`,
-        provider, origin: 'native', displayName: names[provider], enabled: true,
+        provider, origin: 'native', displayName: providerNames[provider], enabled: true,
         dataDir, credentialPaths: credentials[provider].map(name => join(dataDir, name))
       })
     }
     if (provider === 'opencode' && !seen.size && env.OPENCODE_API_KEY?.trim()) {
-      add({ id: 'native:opencode:env', provider, origin: 'native', displayName: names[provider], enabled: true })
+      add({ id: 'native:opencode:env', provider, origin: 'native', displayName: providerNames[provider], enabled: true })
     }
   }
   if (config.scanT3) {

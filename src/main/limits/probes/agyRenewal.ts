@@ -1,10 +1,11 @@
 import { spawn } from 'node:child_process'
-import { mkdir, mkdtemp, open, readFile, rm, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { isAbsolute, join, parse } from 'node:path'
+import { join, parse } from 'node:path'
 import { createInterface } from 'node:readline'
 import { z } from 'zod'
 import { APP_VERSION } from '../../../shared/version'
+import { killWindowsTree } from '../../processTree'
 import type { CachedAntigravityToken } from '../antigravityTokenCache'
 
 export const cliToken = z.object({
@@ -33,29 +34,6 @@ const envAllow = new Set([
   'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'SSL_CERT_FILE', 'SSL_CERT_DIR'
 ])
 const loginRequired = /https:\/\/accounts\.google\.com\/|No browser is available here|invalid_grant|revoked|sign-in required/i
-
-async function killWindowsTree(pid: number, stillRunning: () => boolean): Promise<void> {
-  const root = process.env.SystemRoot ?? process.env.WINDIR
-  if (!root || !isAbsolute(root)) return
-  const executable = join(root, 'System32', 'taskkill.exe')
-  const handle = await open(executable, 'r')
-  try {
-    const header = Buffer.alloc(64)
-    if ((await handle.read(header, 0, 64, 0)).bytesRead !== 64 || header.readUInt16LE(0) !== 0x5a4d) return
-    const offset = header.readUInt32LE(60)
-    if ((await handle.read(header, 0, 4, offset)).bytesRead !== 4 || header.readUInt32LE(0) !== 0x4550) return
-  } finally {
-    await handle.close()
-  }
-  if (!stillRunning()) return
-  await new Promise<void>(resolve => {
-    const tree = spawn(executable, ['/PID', String(pid), '/T', '/F'], {
-      shell: false, windowsHide: true, stdio: 'ignore'
-    })
-    tree.once('error', () => resolve())
-    tree.once('close', () => resolve())
-  })
-}
 
 function acp(
   executable: string, root: string, cwd: string, authMethod: string, signal: AbortSignal

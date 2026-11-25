@@ -83,18 +83,35 @@ export interface AccountView {
 
 export interface AccountsReport {
   scanT3: boolean
+  hiddenAutoCount: number
   accounts: AccountView[]
 }
 
 const displayName = z.string().trim().min(1).max(120)
+
+export type AccountLoginPhase = 'idle' | 'starting' | 'waiting_browser' | 'waiting_code' | 'verifying' | 'succeeded' | 'failed' | 'cancelled'
+
+export interface AccountLoginState {
+  phase: AccountLoginPhase
+  flowId: string | null
+  provider: UsageProviderKind | null
+  authorizationUrl: string | null
+  message: string | null
+}
+
+export const startAccountLoginSchema = z.object({
+  provider: z.enum(['antigravity', 'codex', 'claude']),
+  displayName: displayName.optional()
+})
+export type StartAccountLoginInput = z.infer<typeof startAccountLoginSchema>
 export const addManualAccountSchema = z.object({
   provider: providerSchema,
-  displayName,
+  displayName: z.string().trim().max(120),
   mode: z.enum(['directory', 'credential', 'apiKey']),
   apiKey: z.string().trim().min(1).max(8192).optional()
-}).refine(({ provider, mode, apiKey }) =>
-  mode === 'directory' ? apiKey === undefined
-    : mode === 'credential' ? provider === 'antigravity' && apiKey === undefined
+}).refine(({ provider, mode, apiKey, displayName }) =>
+  mode === 'directory' ? Boolean(displayName) && apiKey === undefined
+    : mode === 'credential' ? Boolean(displayName) && provider === 'antigravity' && apiKey === undefined
       : provider === 'opencode' && Boolean(apiKey))
 export type AddManualAccount = z.infer<typeof addManualAccountSchema>
 

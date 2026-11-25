@@ -6,6 +6,7 @@ import { readJson, writeJsonAtomic } from './jsonFile'
 const configSchema = z.object({
   scanT3: z.boolean().default(true),
   accounts: z.array(accountConfigSchema).default([]),
+  hiddenAccountIds: z.array(z.string().trim().min(1)).default([]),
   accountPreferences: z.record(z.string(), z.object({
     enabled: z.boolean().optional(),
     displayName: z.string().trim().min(1).optional()
@@ -33,10 +34,10 @@ export function writeConfig(userData: string, data: AppConfig): Promise<void> {
 
 const configWrites = new Map<string, Promise<void>>()
 
-export async function updateConfig(userData: string, edit: (current: AppConfig) => AppConfig): Promise<void> {
+export async function updateConfig(userData: string, edit: (current: AppConfig) => AppConfig | Promise<AppConfig>): Promise<void> {
   const previous = configWrites.get(userData)
   const current = (previous ?? Promise.resolve()).catch(() => undefined).then(async () => {
-    await writeConfig(userData, edit(await readConfig(userData)))
+    await writeConfig(userData, await edit(await readConfig(userData)))
   })
   configWrites.set(userData, current)
   try {

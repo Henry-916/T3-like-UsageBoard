@@ -27,21 +27,22 @@ function databaseKeys(dataDir?: string): string[] {
       db.exec('PRAGMA busy_timeout = 100')
       const select = db.prepare(`
         SELECT value FROM credential WHERE integration_id = ? AND active IS NOT 0
-        ORDER BY active DESC, time_created DESC, id DESC LIMIT 1
+        ORDER BY active DESC, time_created DESC, id DESC
       `)
       return ['opencode', 'opencode-go'].flatMap(id => {
-        const row = select.get(id)
-        if (typeof row?.value !== 'string') return []
-        try {
-          const { key, metadata } = storedKey.parse(JSON.parse(row.value))
-          if (typeof metadata?.server === 'string') {
-            const url = new URL(metadata.server)
-            if (`${url.origin}${url.pathname.replace(/\/+$/, '')}` !== 'https://opencode.ai/console') return []
-          }
-          return [key]
-        } catch {
-          return []
+        for (const row of select.iterate(id)) {
+          if (typeof row.value !== 'string') continue
+          const parsed = (() => {
+            try { return storedKey.safeParse(JSON.parse(row.value)) } catch { return undefined }
+          })()
+          if (!parsed?.success) continue
+          const { key, metadata } = parsed.data
+          const server = metadata?.server
+          if (server != null && (typeof server !== 'string'
+            || (server.trim() && server.trim().replace(/\/+$/, '') !== 'https://opencode.ai/console'))) continue
+          if (key.trim()) return [key]
         }
+        return []
       })
     } finally {
       db.close()
@@ -50,6 +51,10 @@ function databaseKeys(dataDir?: string): string[] {
     // Older databases may not have credential storage.
     return []
   }
+}
+
+export function hasOpenCodeDbCredential(dataDir?: string): boolean {
+  return databaseKeys(dataDir).length > 0
 }
 
 export async function probeOpenCode(account: DiscoveredAccount, ctx: LimitsProbeContext): Promise<LimitsProbeResult> {

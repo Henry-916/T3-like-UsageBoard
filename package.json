@@ -1,21 +1,26 @@
 {
   "name": "usage-dashboard",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "private": true,
   "description": "独立的 Windows AI 用量看板",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Henry-916/UsageDashboard.git"
+  },
   "main": "./out/main/index.js",
   "packageManager": "pnpm@12.10.1",
   "scripts": {
     "postinstall": "install-electron",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "package:win": "pnpm build && electron-builder --win --x64",
+    "package:win": "pnpm build && electron-builder --win --x64 --publish never",
     "preview": "electron-vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
     "lucide-react": "^1.0.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

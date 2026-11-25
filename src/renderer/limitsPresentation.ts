@@ -6,7 +6,7 @@ import { providerInfo } from './usagePresentation'
 export const accountOriginLabels: Record<AccountOrigin, string> = {
   native: '原生',
   t3: 'T3',
-  manual: '手动'
+  manual: '应用内'
 }
 
 export function visibleLimitIssues(

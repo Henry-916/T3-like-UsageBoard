@@ -47,3 +47,21 @@ test('reads native, T3 and manual accounts without modifying T3 settings', async
     await rm(home, { recursive: true, force: true })
   }
 })
+
+test('discovers ACP first and retains hidden and credentialless history directories', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'usage-discovery-acp-'))
+  try {
+    const dirs = ['antigravity-acp', 'antigravity', 'antigravity-cli', 'antigravity-ide']
+      .map(name => join(home, '.gemini', name))
+    await Promise.all(dirs.map(dir => mkdir(dir, { recursive: true })))
+    await writeFile(join(dirs[0], 'acp_token.json'), '{"fixture":true}')
+    const config = await readConfig(join(home, 'app'))
+    const options = { home, env: {} }
+    const accounts = await discoverAccounts(config, options)
+    expect(accounts.map(account => account.dataDir)).toEqual(dirs)
+    expect(accounts[0].credentialPaths).toContain(join(dirs[0], 'acp_token.json'))
+    expect(await discoverAccounts({ ...config, hiddenAccountIds: [accounts[0].id] }, options)).toEqual(accounts)
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+})

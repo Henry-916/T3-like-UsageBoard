@@ -1,6 +1,8 @@
 import { Check, ChevronDown, Minus, RefreshCw, Settings2, X } from 'lucide-react'
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { UsageProviderKind } from '../../shared/types'
+import type { UpdateControls } from '../hooks/useUpdates'
+import { updateActionLabel } from '../updatePresentation'
 import { providerInfo, providers, ranges, type UsageRange, type UsageView } from '../usagePresentation'
 import { ProviderMark } from './ProviderMark'
 
@@ -45,8 +47,9 @@ function placePopover(panel: HTMLDivElement | null, trigger: HTMLButtonElement |
   panel.style.top = `${Math.max(edge, Math.min(top, window.innerHeight - height - edge))}px`
 }
 
-export function TopBar({ hiddenProviders, range, view, refreshing, maximized, onHiddenProviders, onRange, onView, onRefresh, onPrices, onAccounts, onWindow }: {
+export function TopBar({ hiddenProviders, range, view, refreshing, maximized, updates, onHiddenProviders, onRange, onView, onRefresh, onPrices, onAccounts, onWindow }: {
   hiddenProviders: readonly UsageProviderKind[]; range: UsageRange; view: UsageView; refreshing: boolean; maximized: boolean
+  updates: UpdateControls
   onHiddenProviders: (providers: UsageProviderKind[]) => void
   onRange: (range: UsageRange) => void
   onView: (view: UsageView) => void
@@ -70,6 +73,8 @@ export function TopBar({ hiddenProviders, range, view, refreshing, maximized, on
     : `${visible.length} 个提供方`
   const refreshLabel = view === 'limits' ? '刷新额度' : '刷新用量'
   const maximizeLabel = maximized ? '向下还原' : '最大化'
+  const updateStatus = updates.state?.status
+  const showUpdate = updateStatus === 'available' || updateStatus === 'downloading' || updateStatus === 'downloaded'
 
   useEffect(() => {
     if (CSS.supports('position-area: block-end span-inline-end')) return
@@ -176,6 +181,12 @@ export function TopBar({ hiddenProviders, range, view, refreshing, maximized, on
         {view !== 'limits' && <Segmented label="时间范围" options={ranges} value={range} onChange={onRange} />}
         <Segmented label="用量视图" options={views} value={view} onChange={onView} />
         <div className="titlebar-tools">
+          <span role="status" className="sr-only">{showUpdate && (updateStatus === 'downloading'
+            ? '正在下载更新' : updateStatus === 'downloaded' ? '更新已下载' : updateActionLabel(updates.state, 'capsule'))}</span>
+          {showUpdate && <button type="button" className="action-button titlebar-update" disabled={updates.disabled}
+            onClick={() => void updates.run()}>
+            {updateActionLabel(updates.state, 'capsule')}
+          </button>}
           <button type="button" className="icon-button" aria-label={refreshLabel} title={`${refreshLabel} (R)`}
             aria-busy={refreshing} disabled={refreshing} onClick={onRefresh}>
             <RefreshCw size={15} className={refreshing ? 'motion-safe:animate-spin' : undefined} aria-hidden="true" />
@@ -187,6 +198,9 @@ export function TopBar({ hiddenProviders, range, view, refreshing, maximized, on
             onToggle={(event) => placePopover(event.currentTarget, settingsTrigger.current, true)}>
             <button type="button" aria-haspopup="dialog" onClick={() => choose(onAccounts)}>账号管理</button>
             <button type="button" aria-haspopup="dialog" onClick={() => choose(onPrices)}>自定义模型价格</button>
+            <button type="button" disabled={updates.disabled} onClick={() => choose(() => void updates.run())}>
+              {updateActionLabel(updates.state, 'menu')}
+            </button>
           </div>
           <div className="window-controls">
             <button type="button" className="icon-button" aria-label="最小化" title="最小化" onClick={() => onWindow('minimize')}>

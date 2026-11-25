@@ -3,18 +3,23 @@ import type { BrowserWindow, IpcMainInvokeEvent } from 'electron'
 import { usageChannels } from '../shared/ipc'
 import { pricingSettingsSchema, uiPreferencesSchema, usageSummaryInputSchema } from '../shared/types'
 import type { UsageSummary, UsageSummaryInput } from '../shared/types'
-import { accountChangesSchema, addManualAccountSchema } from '../shared/limitsTypes'
+import { accountChangesSchema, addManualAccountSchema, startAccountLoginSchema } from '../shared/limitsTypes'
 import type { AccountsReport } from '../shared/limitsTypes'
 import { readConfig, updateConfig } from './configStore'
 import type { createAccountService } from './accounts/service'
 import type { createLimitsService } from './limits/service'
+import type { createAccountLoginManager } from './accounts/loginManager'
+import type { createUpdater } from './updater'
 
 export function registerIpc(
   getWindow: () => BrowserWindow | undefined,
   userData: string,
   getSummary: (input: UsageSummaryInput, refresh?: boolean) => Promise<UsageSummary>,
   accounts: ReturnType<typeof createAccountService>,
-  limits: ReturnType<typeof createLimitsService>
+  limits: ReturnType<typeof createLimitsService>,
+  login: ReturnType<typeof createAccountLoginManager>,
+  updater: ReturnType<typeof createUpdater>,
+  openExternal: (url: string) => Promise<void>
 ): void {
   function ownWindow(event: IpcMainInvokeEvent): BrowserWindow {
     const window = getWindow()
@@ -90,9 +95,40 @@ export function registerIpc(
   })
   ipcMain.handle(usageChannels.removeAccount, async (event, id: unknown) => {
     ownWindow(event)
-    if (typeof id !== 'string') throw new Error('Invalid manual account')
+    if (typeof id !== 'string' || !id.trim() || id.length > 512) throw new Error('Invalid account')
     return updated(await accounts.remove(id))
   })
+  ipcMain.handle(usageChannels.restoreHiddenAccounts, async event => {
+    ownWindow(event)
+    return updated(await accounts.restoreHidden())
+  })
+  ipcMain.handle(usageChannels.accountLoginState, event => { ownWindow(event); return login.getState() })
+  ipcMain.handle(usageChannels.startAccountLogin, (event, input: unknown) => {
+    ownWindow(event)
+    const parsed = startAccountLoginSchema.safeParse(input)
+    if (!parsed.success) throw new Error('登录参数无效。')
+    return login.start(parsed.data)
+  })
+  const validFlowId = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9-]{36}$/i.test(value)
+  ipcMain.handle(usageChannels.submitAccountLoginCode, (event, id: unknown, code: unknown) => {
+    ownWindow(event)
+    if (!validFlowId(id) || typeof code !== 'string' || !code.trim() || code.length > 8192) throw new Error('授权信息无效。')
+    return login.submitCode(id, code)
+  })
+  ipcMain.handle(usageChannels.cancelAccountLogin, (event, id: unknown) => {
+    ownWindow(event)
+    if (!validFlowId(id)) throw new Error('登录流程无效。')
+    return login.cancel(id)
+  })
+  ipcMain.handle(usageChannels.openExternalUrl, (event, url: unknown) => {
+    ownWindow(event)
+    if (typeof url !== 'string' || url.length > 8192) throw new Error('链接无效。')
+    return openExternal(url)
+  })
+  ipcMain.handle(usageChannels.getUpdateState, event => { ownWindow(event); return updater.getState() })
+  ipcMain.handle(usageChannels.checkForUpdates, event => { ownWindow(event); return updater.checkForUpdates() })
+  ipcMain.handle(usageChannels.downloadUpdate, event => { ownWindow(event); return updater.downloadUpdate() })
+  ipcMain.handle(usageChannels.installUpdate, event => { ownWindow(event); return updater.installUpdate() })
   ipcMain.handle(usageChannels.preferences, async event => {
     ownWindow(event)
     return uiPreferencesSchema.parse((await readConfig(userData)).preferences)

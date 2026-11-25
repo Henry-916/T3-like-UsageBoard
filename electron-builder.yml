@@ -1,6 +1,11 @@
 appId: com.usage-dashboard.app
 productName: Usage Dashboard
 npmRebuild: false
+publish:
+  provider: github
+  owner: Henry-916
+  repo: UsageDashboard
+  releaseType: release
 directories:
   output: dist
 files:
@@ -14,6 +19,8 @@ extraResources:
     to: fallback-rates.json
 win:
   icon: resources/tray-icon.ico
+  # Unsigned local builds have no publisher identity; signed distribution should
+  # configure a publisher so electron-updater can enforce its default verification.
   signExecutable: false
   target:
     - target: nsis

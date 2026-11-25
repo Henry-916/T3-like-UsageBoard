@@ -138,6 +138,7 @@ button:disabled { cursor: default; }
   margin: 4px -4px;
 }
 .settings-panel button { text-align: start; padding: 7px 9px; border-radius: 4px; font-size: 13px; }
+.settings-panel button:disabled { opacity: .5; background: none; }
 .segmented {
   display: inline-flex;
   align-items: center;
@@ -249,6 +250,18 @@ button:disabled { cursor: default; }
   line-height: 1.5;
 }
 .notice-error { margin-bottom: 18px; }
+.update-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-inline: 10px 3px;
+  border: 1px solid var(--color-divider);
+  border-radius: 6px;
+  color: var(--color-subtle);
+  font-size: 13px;
+}
 .view-placeholder { padding: 64px 20px; text-align: center; color: var(--color-subtle); font-size: 14px; }
 .skeleton { border-radius: 5px; background: var(--control); }
 .skeleton-chart { height: 228px; }
@@ -313,6 +326,19 @@ button:disabled { cursor: default; }
 .action-button.primary-action { background: var(--color-ink); color: var(--color-canvas); font-weight: 600; }
 .action-button.primary-action:hover:not(:disabled) { background: #fff; }
 .action-button:disabled { opacity: .42; }
+.titlebar-tools .titlebar-update {
+  min-height: 24px;
+  max-width: 145px;
+  display: block;
+  overflow: hidden;
+  margin-inline-end: 3px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--color-subtle);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+}
 .price-dialog-body { display: flex; flex-direction: column; gap: 12px; }
 .price-dialog-body > * { flex: none; }
 .price-table-toolbar { display: flex; justify-content: space-between; gap: 8px; align-items: center; color: var(--color-subtle); font-size: 12px; }
@@ -381,6 +407,16 @@ button:disabled { cursor: default; }
 .account-add-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); gap: 10px; }
 .account-add-form label { display: grid; min-width: 0; gap: 5px; color: var(--color-subtle); font-size: 13px; }
 .accounts-error { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--color-error); font-size: 13px; }
+.account-hidden-row, .accounts-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--color-subtle);
+  font-size: 13px;
+}
+.account-login-status { color: var(--color-subtle); font-size: 13px; }
+.accounts-dialog-footer { font-variant-numeric: tabular-nums; }
 
 @media (min-width: 820px) and (max-width: 920px) {
   .usage-hero { grid-template-columns: minmax(0, 16.5rem) minmax(0, 1fr); gap: 22px; }
