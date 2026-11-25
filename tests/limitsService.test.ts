@@ -57,6 +57,44 @@ const ok: LimitsProbeResult = {
 }
 const unsupported = async () => ({ kind: 'unsupported' } as const)
 
+test('switch drains a running probe, blocks new quota work, and refreshes after release', async () => {
+  const source: DiscoveredAccount = { ...native, provider: 'codex', current: true }
+  const representative: DiscoveredAccount = { ...source, id: 'manual', origin: 'manual', credentialSource: source }
+  let entered!: () => void
+  let release!: () => void
+  const probing = new Promise<void>(resolve => { entered = resolve })
+  const pending = new Promise<void>(resolve => { release = resolve })
+  const probe = vi.fn(async (_account: DiscoveredAccount) => {
+    entered()
+    await pending
+    return ok
+  })
+  const redeem = vi.fn(async () => 'reset' as const)
+  const service = createLimitsService({
+    discover: async () => [representative], probes: { codex: probe, antigravity: unsupported, claude: unsupported, opencode: unsupported },
+    getManualApiKey: async () => undefined, readCredential: async () => undefined,
+    consumeCodexCredit: redeem, onUpdate: () => undefined
+  })
+  const refresh = service.refresh()
+  await probing
+  const switchOperation = vi.fn(async () => {
+    expect(probe).toHaveBeenCalledTimes(1)
+    await service.refresh()
+    await expect(service.consumeResetCredit('manual')).rejects.toThrow()
+  })
+  const switching = service.exclusiveSwitch(switchOperation)
+  await expect(service.exclusiveSwitch(async () => undefined)).rejects.toThrow()
+  expect(switchOperation).not.toHaveBeenCalled()
+  release()
+  expect((await refresh).accounts).toMatchObject([{ id: 'manual', current: true }])
+  expect(probe.mock.calls[0][0]).toBe(source)
+  await switching
+  await service.refresh()
+  expect(probe).toHaveBeenCalledTimes(2)
+  expect(redeem).not.toHaveBeenCalled()
+  service.stop()
+})
+
 test('reset credit pins a discovered account and waits for confirmed quota and credit changes', async () => {
   const codex: DiscoveredAccount = { ...native, id: 'codex', provider: 'codex' }
   let checks = 0

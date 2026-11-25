@@ -279,6 +279,7 @@ button:disabled { cursor: default; }
 .dialog-header h2 { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
 .dialog-header p { margin-top: 5px; color: var(--color-subtle); font-size: 12px; }
 .dialog-close { position: absolute; top: 14px; right: 14px; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 20px; }
 .dialog-body { min-height: 0; padding: 4px 24px 24px; overflow: auto; overscroll-behavior: contain; }
 .model-dialog-body { display: flex; flex-direction: column; gap: 22px; }
 .model-dialog-body > * { flex: none; }
@@ -402,25 +403,47 @@ button:disabled { cursor: default; }
 .account-item { border-bottom: 1px solid var(--color-divider); }
 .account-line {
   display: grid;
-  grid-template-columns: 17px minmax(0, 1fr) 32px 31px 31px;
+  grid-template-columns: 17px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 7px;
-  padding-block: 10px;
+  gap: 9px;
+  padding-block: 11px;
 }
-.account-ident { display: grid; min-width: 0; gap: 2px; font-size: 13px; }
-.account-ident :is(strong, span) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.account-ident strong { font-weight: 600; }
-.account-ident span { color: var(--color-subtle); }
+.account-ident { display: grid; min-inline-size: 0; gap: 3px; font-size: 13px; }
+.account-ident strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-email-line { display: flex; align-items: center; gap: 6px; min-inline-size: 0; }
+.account-email, .account-switch-target {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-email { color: var(--color-subtle); }
+.account-current-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  padding: 1px 6px;
+  border: 1px solid var(--color-divider);
+  border-radius: 999px;
+  background: var(--control);
+  color: var(--color-ink);
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+.account-actions { display: flex; align-items: center; gap: 7px; }
+.account-actions .account-switch { min-height: 27px; padding-inline: 7px; }
 .account-remove:hover:not(:disabled), .remove-action { color: var(--color-error); }
 .account-editor { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 0 0 10px 24px; font-size: 13px; }
-.account-editor input { flex: 1 0 min(100%, 10rem); width: auto; min-width: 0; }
+.account-switch-description { display: grid; min-inline-size: 0; gap: 7px; padding: 0 24px; color: var(--color-subtle); font-size: 13px; }
+.account-switch-target { color: var(--color-ink); font-weight: 600; }
+.account-switch-error { padding: 8px 24px 0; }
 .account-add-form {
   display: grid;
   gap: 10px;
   padding: 10px 0 0;
   border-top: 1px solid var(--color-divider);
 }
-.account-add-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); gap: 10px; }
 .account-add-form label, .provider-select, .login-link {
   display: grid;
   min-width: 0;

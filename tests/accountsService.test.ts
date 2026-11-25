@@ -31,7 +31,7 @@ test('imports credentials privately, persists preferences, and removes the impor
     expect(await service.readCredential(item.credentialPath!)).toEqual(JSON.parse(sensitive))
     expect(await readFile(credential, 'utf8')).toBe(sensitive)
     expect((await service.update(view.id, { displayName: 'Renamed', enabled: false })).accounts[0])
-      .toMatchObject({ displayName: 'Renamed', enabled: false })
+      .toMatchObject({ displayName: '正在识别…', enabled: false })
     expect((await service.setScanT3(false)).scanT3).toBe(false)
     expect((await service.remove(view.id)).accounts).toEqual([])
     await expect(readFile(item.credentialPath!)).rejects.toMatchObject({ code: 'ENOENT' })
@@ -85,7 +85,7 @@ test('lists only usable auto credentials, persists hiding, and restores without 
     expect((await readConfig(userData)).hiddenAccountIds).toEqual([claude])
     expect((await readConfig(userData)).accountPreferences[claude]).toBeUndefined()
     expect((await service.listInternal()).map(account => account.provider)).toEqual(['antigravity', 'opencode'])
-    expect((await service.restoreHidden()).accounts[2].displayName).toBe('Claude Code')
+    expect((await service.restoreHidden()).accounts[2].displayName).toBe('正在识别…')
     await expect(service.remove('unknown')).rejects.toThrow('Unknown account')
     const added = await service.add({ provider: 'codex', displayName: 'Imported', mode: 'directory' })
     const manual = added!.accounts.find(account => account.origin === 'manual')!
@@ -98,7 +98,7 @@ test('lists only usable auto credentials, persists hiding, and restores without 
   }
 })
 
-test('managed accounts validate ownership, serialize names, and clean up after the removal callback', async () => {
+test('managed accounts validate ownership, use canonical labels, and clean up after the removal callback', async () => {
   const home = await mkdtemp(join(tmpdir(), 'usage-accounts-managed-'))
   try {
     const userData = join(home, 'app')
@@ -122,7 +122,7 @@ test('managed accounts validate ownership, serialize names, and clean up after t
     })
     const credential = { filename: 'antigravity-oauth-token', text: 'fixture' }
     await Promise.all([1, 2].map(n => service.addManagedAccount({ id: id(n), provider: 'antigravity' }, credential)))
-    expect((await service.list()).accounts.map(account => account.displayName)).toEqual(['Antigravity', 'Antigravity 2'])
+    expect((await service.list()).accounts.map(account => account.displayName)).toEqual(['正在识别…', '正在识别…'])
     await expect(service.addManagedAccount({ id: id(4), provider: 'antigravity' }, {
       ...credential, filename: '../antigravity-oauth-token'
     })).rejects.toThrow('Invalid credential file')
@@ -169,7 +169,105 @@ test('manual OpenCode keys stay out of config and renderer data', async () => {
     await Promise.all(['', '   '].map(displayName =>
       service.add({ provider: 'opencode', displayName, mode: 'apiKey', apiKey: key })))
     const names = (await service.list()).accounts.map(account => account.displayName)
-    expect(names).toEqual(['Go', 'OpenCode', 'OpenCode 2', 'OpenCode 3'])
+    expect(names).toEqual(Array(4).fill('OpenCode Go'))
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test('merges normalized manual and current identities while routing reads to the active slot and snapshots safely', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'usage-accounts-current-'))
+  try {
+    const userData = join(home, 'app')
+    const cli = (email: string, marker: string) => JSON.stringify({
+      id_token_email: email, token: { access_token: marker, refresh_token: marker }
+    })
+    let current = Buffer.from(cli(' SAME@Example.COM ', 'active-fixture'))
+    const service = createAccountService({
+      userData, pickDirectory: async () => undefined, pickCredential: async () => undefined,
+      encrypt: text => Buffer.from(`encrypted:${text}`),
+      decrypt: bytes => bytes.toString().slice('encrypted:'.length),
+      discover: config => discoverAccounts(config, { home, env: {} }),
+      readAntigravityCredential: async () => ({ blob: current })
+    })
+    const id = 'manual-00000000-0000-0000-0000-000000000006'
+    const filename = 'antigravity-oauth-token'
+    const initial = await service.addManagedAccount({ id, provider: 'antigravity' }, { filename, text: cli('same@example.com', 'old-fixture') })
+    expect(initial.accounts).toMatchObject([{ id, displayName: 'same@example.com', current: true }])
+    expect(JSON.stringify(initial)).not.toContain('active-fixture')
+    const [representative] = await service.listInternal()
+    expect(representative.credentialSource?.currentCredential).toEqual(current)
+    expect(representative.canSwitch).toBeUndefined()
+    expect(await readFile(representative.credentialPath!, 'utf8')).toContain('old-fixture')
+    await service.snapshotCurrentCredential('antigravity', current.toString())
+    expect(await readFile(representative.credentialPath!, 'utf8')).toBe(`encrypted:${current.toString()}`)
+    expect((await readConfig(userData)).accounts).toHaveLength(1)
+    current = Buffer.from(cli('different@example.com', 'new-fixture'))
+    expect((await service.list()).accounts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id, canSwitch: true }),
+      expect.objectContaining({ id: 'native:antigravity:credman', current: true, displayName: 'different@example.com' })
+    ]))
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test('caches learned email across service restarts and reads nested Codex JWT email offline', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'usage-accounts-identities-'))
+  try {
+    const dir = join(home, 'codex-override')
+    await mkdir(dir)
+    const jwt = Buffer.from(JSON.stringify({ 'https://api.openai.com/profile': { email: 'EXAMPLE@example.com' } })).toString('base64url')
+    await writeFile(join(dir, 'auth.json'), JSON.stringify({ tokens: { id_token: `x.${jwt}.x`, access_token: 'fixture' } }))
+    const options = {
+      userData: join(home, 'app'), pickDirectory: async () => undefined, pickCredential: async () => undefined,
+      encrypt: (text: string) => Buffer.from(text), decrypt: (bytes: Buffer) => bytes.toString(),
+      discover: (config: Parameters<typeof discoverAccounts>[0]) => discoverAccounts(config, { home, env: { CODEX_HOME: dir } })
+    }
+    const service = createAccountService(options)
+    expect((await service.list()).accounts).toMatchObject([{ provider: 'codex', displayName: 'example@example.com', current: true }])
+    const report = await service.addManagedAccount({ id: 'manual-00000000-0000-0000-0000-000000000007', provider: 'antigravity' },
+      { filename: 'acp_token.json', text: '{"fixture":true}' })
+    const id = report.accounts.find(account => account.provider === 'antigravity')!.id
+    const account = (await service.listInternal()).find(account => account.id === id)!
+    await service.recordIdentity(account)
+    expect((await service.list()).accounts.find(account => account.id === id)?.displayName).toBe('未知账号')
+    await service.recordIdentity(account, ' LEARNED@example.com ')
+    expect((await createAccountService(options).list()).accounts.find(account => account.id === id)?.displayName).toBe('learned@example.com')
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test('encrypts new automatic Codex snapshots and updates existing managed profiles in place', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'usage-codex-snapshot-'))
+  try {
+    const userData = join(home, 'app')
+    const auth = (email: string, marker: string) => JSON.stringify({
+      tokens: { access_token: marker, id_token: `x.${Buffer.from(JSON.stringify({ email })).toString('base64url')}.x` }
+    })
+    const service = createAccountService({
+      userData, pickDirectory: async () => undefined, pickCredential: async () => undefined,
+      encrypt: text => Buffer.from(Buffer.from(text).map(byte => byte ^ 0x55)),
+      decrypt: bytes => Buffer.from(bytes.map(byte => byte ^ 0x55)).toString(),
+      discover: config => discoverAccounts(config, { home, env: {} })
+    })
+    await service.snapshotCurrentCredential('codex', auth('auto@example.com', 'before-fixture'))
+    await service.snapshotCurrentCredential('codex', auth('AUTO@example.com', 'rotated-fixture'))
+    const [auto] = await service.listInternal()
+    const encrypted = auto.switchSource?.credentialPaths?.[0]
+    expect(encrypted).toBe(join(userData, 'accounts', auto.id, 'auth.json'))
+    expect(auto.dataDir).toBeUndefined()
+    expect(await service.readCredential(encrypted!)).toEqual(JSON.parse(auth('AUTO@example.com', 'rotated-fixture')))
+    expect(await readFile(encrypted!, 'utf8')).not.toContain('rotated-fixture')
+    const managed = 'manual-00000000-0000-0000-0000-000000000008'
+    const profile = join(userData, 'profiles', managed)
+    await mkdir(profile, { recursive: true })
+    await writeFile(join(profile, 'auth.json'), auth('managed@example.com', 'original-fixture'))
+    await service.addManagedAccount({ id: managed, provider: 'codex', dataDir: profile })
+    await service.snapshotCurrentCredential('codex', auth('managed@example.com', 'updated-fixture'))
+    expect(await readFile(join(profile, 'auth.json'), 'utf8')).toBe(auth('managed@example.com', 'updated-fixture'))
+    expect((await readConfig(userData)).accounts).toHaveLength(2)
   } finally {
     await rm(home, { recursive: true, force: true })
   }

@@ -163,6 +163,12 @@ export const accountConfigSchema = z.object({
 })
 export type AccountConfig = z.infer<typeof accountConfigSchema>
 export interface DiscoveredAccount extends AccountConfig {
+  email?: string
+  current?: boolean
+  canSwitch?: boolean
+  credentialSource?: DiscoveredAccount
+  switchSource?: DiscoveredAccount
+  currentCredential?: Buffer
   origin: 'native' | 't3' | 'manual'
   enabled: boolean
   credentialPaths?: string[]

@@ -188,7 +188,7 @@ export function createUpdater(options: UpdaterOptions = {}) {
       config = await readFile(join(options.resourcesPath ?? process.resourcesPath, 'app-update.yml'), 'utf8')
     } catch { /* use the default repository without packaged metadata */ }
     const owner = /^owner:[ \t]*['"]?([A-Za-z0-9-]+)['"]?[ \t]*\r?$/m.exec(config)?.[1] ?? 'Henry-916'
-    const repo = /^repo:[ \t]*['"]?([A-Za-z0-9_.-]+)['"]?[ \t]*\r?$/m.exec(config)?.[1] ?? 'UsageDashboard'
+    const repo = /^repo:[ \t]*['"]?([A-Za-z0-9_.-]+)['"]?[ \t]*\r?$/m.exec(config)?.[1] ?? 'T3-like-UsageBoard'
     return new URL(`https://api.github.com/repos/${owner}/${repo}/releases/latest`)
   }
 
@@ -196,7 +196,7 @@ export function createUpdater(options: UpdaterOptions = {}) {
     const controller = activeFetch = new AbortController()
     try {
       const response = await fetchUrl(await releaseApi(), {
-        headers: { Accept: 'application/vnd.github+json', 'User-Agent': `UsageDashboard/${currentVersion}` },
+        headers: { Accept: 'application/vnd.github+json', 'User-Agent': `T3-like-UsageBoard/${currentVersion}` },
         redirect: 'error',
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)])
       })

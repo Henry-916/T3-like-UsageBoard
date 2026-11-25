@@ -1,5 +1,6 @@
-import { join } from 'node:path'
-import { mkdir } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { homedir } from 'node:os'
+import { mkdirSync } from 'node:fs'
 import { app, BrowserWindow, dialog, safeStorage, shell } from 'electron'
 import type { Tray } from 'electron'
 import trayIconPath from '../../resources/tray-icon.ico?asset'
@@ -19,6 +20,11 @@ import { probeClaude } from './limits/probes/claude'
 import { probeCodex } from './limits/probes/codex'
 import { createCodexResetCreditConsumer } from './limits/codexResetCredit'
 import { probeOpenCode } from './limits/probes/opencode'
+import { migrateUserData } from './userDataMigration'
+import { createTrayPanel } from './trayPanel'
+import { readAntigravityCredential, writeAntigravityCredential, compareAndWriteAntigravityCredential } from './accounts/windowsCredentials'
+import { stopAntigravityForSwitch, stopCodexForSwitch } from './accounts/windowsSwitchProcesses'
+import { assertSwitchPath, prepareAntigravitySwitch, prepareCodexSwitch, readSwitchTarget, runAccountSwitch, SwitchRollbackError } from './accounts/switchAccount'
 
 let panel: BrowserWindow | undefined
 let tray: (Tray & { refreshMenu(): void }) | undefined
@@ -33,7 +39,7 @@ function showPanel(): void {
 
 function createPanel(): void {
   const window = new BrowserWindow({
-    title: 'UsageDashboard',
+    title: 'T3-like UsageBoard',
     width: 1100,
     height: 780,
     minWidth: 840,
@@ -72,23 +78,37 @@ function createPanel(): void {
   const devUrl = !app.isPackaged && process.env.ELECTRON_RENDERER_URL
   const load = devUrl ? window.loadURL(devUrl) : window.loadFile(join(__dirname, '../renderer/index.html'))
   void load.catch(() => {
-    console.error('Failed to load the UsageDashboard window.')
+    console.error('T3-like UsageBoard: failed to load the window.')
     app.exit(1)
   })
 }
 
+const appData = app.getPath('appData')
+const userData = join(appData, 't3-like-usageboard')
+mkdirSync(userData, { recursive: true })
+app.setPath('userData', userData)
+
+function migrateBeforeReady(): boolean {
+  try { migrateUserData(join(appData, 'usage-dashboard'), userData); return true } catch {
+    console.error('T3-like UsageBoard: could not migrate the existing user data.')
+    return false
+  }
+}
+
 if (!app.requestSingleInstanceLock()) {
   app.quit()
+} else if (!migrateBeforeReady()) {
+  app.exit(1)
 } else {
-  app.setAppUserModelId('com.usage-dashboard.app')
+  app.setAppUserModelId('com.t3-like-usageboard.app')
   app.on('second-instance', showPanel)
   app.on('activate', showPanel)
   app.on('before-quit', () => { quitting = true })
   app.on('will-quit', () => tray?.destroy())
   void app.whenReady().then(async () => {
     const fallbackRates = join(app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'resources'), 'fallback-rates.json')
-    const userData = app.getPath('userData')
-    await mkdir(userData, { recursive: true })
+    const trayPanel = createTrayPanel({ iconPath: trayIconPath, showMain: showPanel,
+      rendererUrl: !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined })
     const usage = createUsageClient(userData, fallbackRates)
     const encrypt = async (text: string) => {
       if (!await safeStorage.isAsyncEncryptionAvailable()) throw new Error('Credential encryption is unavailable')
@@ -114,6 +134,7 @@ if (!app.requestSingleInstanceLock()) {
       },
       encrypt,
       decrypt,
+      readAntigravityCredential,
       async onAccountRemoved(account): Promise<void> {
         if (account.provider !== 'antigravity' || !account.credentialPath) return
         const stored = await accounts.readCredential(account.credentialPath).catch(() => undefined) as
@@ -126,19 +147,65 @@ if (!app.requestSingleInstanceLock()) {
     })
     const antigravity = createAntigravityProbe({
       tokenCache,
-      getScanT3: async () => (await readConfig(userData)).scanT3
+      getScanT3: async () => (await readConfig(userData)).scanT3,
+      readCurrentCredential: readAntigravityCredential,
+      compareAndWriteCurrentCredential: compareAndWriteAntigravityCredential
     })
     const limits = createLimitsService({
       userData,
       consumeCodexCredit: createCodexResetCreditConsumer(),
       discover: accounts.listInternal,
+      recordIdentity: accounts.recordIdentity,
       readCredential: accounts.readCredential,
       getManualApiKey: accounts.getManualApiKey,
       probes: { antigravity, opencode: probeOpenCode, codex: probeCodex, claude: probeClaude },
       onUpdate: (report) => {
         if (panel && !panel.webContents.isDestroyed()) panel.webContents.send(usageChannels.limitsUpdated, report)
+        trayPanel.send(usageChannels.limitsUpdated, report)
       }
     })
+    let activeSwitch: Promise<Awaited<ReturnType<typeof accounts.list>>> | undefined
+    let rollbackFailure: SwitchRollbackError | undefined
+    function switchAccount(id: string) {
+      if (rollbackFailure) throw rollbackFailure
+      if (process.platform !== 'win32' || quitting) throw new Error('当前无法切换账号。')
+      if (activeSwitch) throw new Error('正在切换账号，请稍候。')
+      const operation = limits.exclusiveSwitch(async () => {
+        const selected = (await accounts.listInternal()).find(item => item.id === id)
+        const source = selected?.switchSource
+        const provider = selected?.provider
+        if (!source || !selected?.email || selected.current || (provider !== 'codex' && provider !== 'antigravity')) {
+          throw new Error('目标账号或凭证不可用，请刷新后重试。')
+        }
+        const target = await readSwitchTarget(source, accounts.readCredential, tokenCache)
+          .catch(() => { throw new Error('无法读取目标账号凭证。') })
+        const codexFile = join(process.env.CODEX_HOME?.trim() || join(homedir(), '.codex'), 'auth.json')
+        const cacheFiles = ['antigravity-cli', 'antigravity'].map(dir => join(homedir(), '.gemini', dir, 'cache', 'default_project_id.txt'))
+        try {
+          await Promise.all((provider === 'codex' ? [codexFile, dirname(codexFile)] : cacheFiles).map(path => assertSwitchPath(path)))
+        } catch { throw new Error('默认凭证或项目缓存路径不安全，未切换。') }
+        await runAccountSwitch({
+          provider, target, expectedEmail: selected.email,
+          stop: provider === 'codex' ? stopCodexForSwitch : stopAntigravityForSwitch,
+          prepare: bytes => provider === 'codex' ? prepareCodexSwitch(codexFile, bytes)
+            : prepareAntigravitySwitch(bytes, cacheFiles, readAntigravityCredential,
+              compareAndWriteAntigravityCredential, writeAntigravityCredential),
+          snapshot: text => accounts.snapshotCurrentCredential(provider, text)
+        }).catch(error => {
+          if (error instanceof SwitchRollbackError) {
+            rollbackFailure = error
+            limits.stop()
+          }
+          throw error
+        })
+        const result = await accounts.list()
+        limits.accountsChanged(result.accounts)
+        return result
+      })
+      activeSwitch = operation
+      void operation.finally(() => { activeSwitch = undefined }).catch(() => undefined)
+      return operation
+    }
     const login = createAccountLoginManager({
       userData,
       getScanT3: async () => (await readConfig(userData)).scanT3,
@@ -156,7 +223,8 @@ if (!app.requestSingleInstanceLock()) {
     function prepareQuitForUpdate(): Promise<void> {
       quitting = true
       limits.stop()
-      cleanup ??= Promise.allSettled([login.stop(), waitForAntigravityRenewals()]).then(() => {
+      trayPanel.hide()
+      cleanup ??= Promise.allSettled([login.stop(), waitForAntigravityRenewals(), activeSwitch]).then(() => {
         cleaned = true
         if (tray && !tray.isDestroyed()) tray.destroy()
         tray = undefined
@@ -177,14 +245,11 @@ if (!app.requestSingleInstanceLock()) {
       void prepareQuitForUpdate().then(() => app.quit())
     })
     app.on('will-quit', updater.stop)
-    registerIpc(() => panel, userData, usage.getSummary, accounts, limits, login, updater, openExternal)
+    registerIpc(() => panel, userData, usage.getSummary, accounts, limits, login, updater, openExternal, trayPanel, switchAccount)
     createPanel()
     tray = createTray(trayIconPath, userData, {
-      show: showPanel,
-      toggle: () => {
-        if (panel?.isVisible() && !panel.isMinimized()) panel.hide()
-        else showPanel()
-      },
+      show: trayPanel.openMain,
+      togglePanel: trayPanel.toggle,
       refresh: () => {
         panel?.webContents.send(usageChannels.refreshRequested)
         void limits.refresh()
@@ -203,7 +268,7 @@ if (!app.requestSingleInstanceLock()) {
     limits.start()
     updater.start()
   }).catch(() => {
-    console.error('Failed to initialize UsageDashboard.')
+    console.error('T3-like UsageBoard: failed to initialize.')
     app.exit(1)
   })
 }

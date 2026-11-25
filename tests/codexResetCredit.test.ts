@@ -141,7 +141,7 @@ it('only falls back on an initial 401 with the same key and exact ticket', async
   const frames = scriptCli(true)
   await expect(createCodexResetCreditConsumer()(account('native'), ctx, 'first')).resolves.toBe('reset')
   expect(frames).toEqual([
-    { id: 1, method: 'initialize', params: { clientInfo: { name: 'usage-dashboard', version: expect.any(String) } } },
+    { id: 1, method: 'initialize', params: { clientInfo: { name: 't3-like-usageboard', version: expect.any(String) } } },
     { method: 'initialized' },
     { id: 2, method: 'account/rateLimitResetCredit/consume',
       params: { idempotencyKey: body(ctx, 0).redeem_request_id, creditId: 'first' } }

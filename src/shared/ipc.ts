@@ -18,6 +18,7 @@ export const usageChannels = {
   limitsUpdated: 'usage:limits-updated',
   accounts: 'usage:get-accounts',
   addAccount: 'usage:add-manual-account',
+  switchAccount: 'usage:switch-account',
   updateAccount: 'usage:update-account',
   removeAccount: 'usage:remove-manual-account',
   restoreHiddenAccounts: 'usage:restore-hidden-accounts',
@@ -35,7 +36,10 @@ export const usageChannels = {
   updateStateChanged: 'usage:update-state-changed',
   setScanT3: 'usage:set-scan-t3',
   preferences: 'usage:get-ui-preferences',
-  savePreferences: 'usage:save-ui-preferences'
+  savePreferences: 'usage:save-ui-preferences',
+  preferencesUpdated: 'usage:ui-preferences-updated',
+  trayResize: 'usage:tray-resize',
+  trayOpenMain: 'usage:tray-open-main'
 } as const
 
 export interface UsageApi {
@@ -54,6 +58,7 @@ export interface UsageApi {
   onLimitsUpdated(listener: (report: LimitsReport) => void): () => void
   getAccounts(): Promise<AccountsReport>
   addManualAccount(input: AddManualAccount): Promise<AccountsReport | null>
+  switchAccount(id: string): Promise<AccountsReport>
   updateAccount(id: string, changes: AccountChanges): Promise<AccountsReport>
   removeManualAccount(id: string): Promise<AccountsReport>
   removeAccount(id: string): Promise<AccountsReport>
@@ -73,4 +78,7 @@ export interface UsageApi {
   setScanT3(enabled: boolean): Promise<AccountsReport>
   getUiPreferences(): Promise<UiPreferences>
   saveUiPreferences(changes: UiPreferences): Promise<void>
+  onUiPreferencesUpdate(listener: (preferences: UiPreferences) => void): () => void
+  trayResize(height: number): Promise<void>
+  trayOpenMain(): Promise<void>
 }

@@ -7,6 +7,7 @@ import type { DiscoveredAccount } from '../../../shared/types'
 import { antigravityTokenKey, createAntigravityTokenCache, type AntigravityTokenCache } from '../antigravityTokenCache'
 import { cliToken, renewAgyCliToken, type CliRenewOutcome, type CliRenewParams } from './agyRenewal'
 import { resolveAgyCli } from './cli'
+import { normalizeEmail } from '../../accounts/identities'
 
 export type { CliRenewOutcome, CliRenewParams } from './agyRenewal'
 
@@ -18,7 +19,7 @@ const acpToken = z.object({
   client_id: text, client_secret: text, refresh_token: text, project_id: text.optional()
 })
 const refreshResponse = z.object({ access_token: text, expires_in: z.number().positive() })
-const userInfo = z.object({ id: text })
+const userInfo = z.object({ id: text.optional(), email: z.unknown().optional() })
 const cache = new Map<string, { accessToken: string; expiresAt: number }>()
 const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex')
 
@@ -101,6 +102,8 @@ export interface AntigravityProbeDeps {
   getScanT3?: () => Promise<boolean>
   resolveCli?: typeof resolveAgyCli
   renewCliToken?: (params: CliRenewParams) => Promise<CliRenewOutcome>
+  readCurrentCredential?: () => Promise<{ blob: Buffer } | undefined>
+  compareAndWriteCurrentCredential?: (expected: Buffer, next: Buffer) => Promise<boolean>
   now?: () => number
 }
 
@@ -154,7 +157,8 @@ async function probe(
     const isAcp = (path: string): boolean => basename(path).toLowerCase() === 'acp_token.json'
     let stored: unknown
     let credentialPath: string | undefined
-    for (const path of [...paths.filter(isAcp), ...paths.filter(path => !isAcp(path))]) {
+    if (account.currentCredential) stored = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(account.currentCredential))
+    for (const path of account.currentCredential ? [] : [...paths.filter(isAcp), ...paths.filter(path => !isAcp(path))]) {
       stored = await ctx.readCredential(path).catch((error: NodeJS.ErrnoException) => {
         if (error?.code !== 'ENOENT') throw error
       })
@@ -203,7 +207,33 @@ async function probe(
       method = authMethod
       accessToken = token.access_token
       credentialFingerprint = sha256(`antigravity-cli\0${token.refresh_token || accessToken}`)
-      if (token.refresh_token) {
+      if (account.currentCredential) {
+        const expected = account.currentCredential
+        if (token.refresh_token && deps.compareAndWriteCurrentCredential) {
+          const refreshToken = token.refresh_token
+          const compareAndWrite = deps.compareAndWriteCurrentCredential
+          recover = () => queueRenewal(ctx.signal, async () => {
+            if (deps.readCurrentCredential && !(await deps.readCurrentCredential())?.blob.equals(expected)) return { kind: 'failed' }
+            const executable = await (deps.resolveCli ?? resolveAgyCli)({ scanT3: await deps.getScanT3?.() })
+            ctx.signal.throwIfAborted()
+            if (!executable) return { kind: 'cli_missing' } as const
+            attemptedRenewal = true
+            const renewed = await (deps.renewCliToken ?? renewAgyCliToken)({ executable, stored: original, authMethod, refreshToken, signal: ctx.signal, now })
+            if (renewed.kind !== 'ok') return renewed
+            const next = Buffer.from(JSON.stringify({ ...original, token: {
+              ...token, access_token: renewed.token.accessToken, refresh_token: renewed.token.refreshToken ?? refreshToken,
+              expiry: renewed.token.expiry
+            } }), 'utf8')
+            return await compareAndWrite(expected, next) ? renewed : { kind: 'failed' }
+          })
+        }
+        if (!(Date.parse(token.expiry ?? '') > now() + 60_000)) {
+          const result = await recover?.()
+          ctx.signal.throwIfAborted()
+          if (!result || result.kind !== 'ok') return failure(result?.kind ?? 'expired')
+          accessToken = result.token.accessToken
+        }
+      } else if (token.refresh_token) {
         const sourceRefreshToken = token.refresh_token
         const key = await antigravityTokenKey(credentialPath, sourceRefreshToken)
         const discardRejectedAccess = async (rejected: string) => {
@@ -294,7 +324,12 @@ async function queryQuota(
   })
   const fingerprint = Promise.race([
     request('https://www.googleapis.com/oauth2/v2/userinfo', { headers }, identitySignal)
-      .then(body => sha256(`google-account\0${userInfo.parse(body).id}`)).catch(() => credentialFingerprint),
+      .then(async body => {
+        const identity = userInfo.parse(body)
+        const email = normalizeEmail(identity.email)
+        if (email && !identitySignal.aborted) await ctx.reportEmail?.(email)
+        return identity.id ? sha256(`google-account\0${identity.id}`) : credentialFingerprint
+      }).catch(() => credentialFingerprint),
     identityTimeout
   ]).finally(() => clearTimeout(identityTimer))
   try {
@@ -326,9 +361,9 @@ async function queryQuota(
     }
     let windows = await fetchWindows('retrieveUserQuotaSummary', summaryWindows)
     if (!windows.length) windows = await fetchWindows('fetchAvailableModels', modelWindows)
-    if (!windows.length) return allUnauthorized ? { kind: 'unauthorized' } : { kind: 'failed' }
     const identity = await fingerprint
     ctx.signal.throwIfAborted()
+    if (!windows.length) return allUnauthorized ? { kind: 'unauthorized' } : { kind: 'failed' }
     return { kind: 'ok', windows, fingerprint: identity }
   } finally {
     identityController.abort()

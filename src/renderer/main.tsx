@@ -7,6 +7,7 @@ import { CostTokenView } from './components/CostTokenView'
 import { LimitsView } from './components/LimitsView'
 import { PriceOverridesDialog } from './components/PriceOverridesDialog'
 import { TopBar } from './components/TopBar'
+import { TrayPanel } from './components/TrayPanel'
 import { UsageModelDialog } from './components/UsageModelDialog'
 import { useLimitsData } from './hooks/useLimitsData'
 import { useUpdates } from './hooks/useUpdates'
@@ -206,4 +207,8 @@ function UsageSkeleton() {
 }
 
 const root = document.getElementById('root')
-if (root) createRoot(root).render(<App />)
+if (root) {
+  const tray = location.hash === '#tray'
+  if (tray) document.documentElement.dataset.view = 'tray'
+  createRoot(root).render(tray ? <TrayPanel /> : <App />)
+}

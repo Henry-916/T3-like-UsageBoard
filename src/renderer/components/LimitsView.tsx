@@ -5,7 +5,7 @@ import type { ConsumeResetCreditOutcome, LimitsReport } from '../../shared/limit
 import type { UsageProviderKind } from '../../shared/types'
 import { poolUsageLimits, type PooledLimitAccount, type PooledLimitWindow } from '../../shared/usageLimits'
 import {
-  accountOriginLabels, formatLimitPercent, limitDateTime, limitIssueText, limitTimeLeft,
+  formatLimitPercent, limitDateTime, limitIssueText, limitTimeLeft,
   resetBadgeDuration, resetCreditText, resetDetailTime, visibleLimitIssues
 } from '../limitsPresentation'
 import { providerInfo } from '../usagePresentation'
@@ -332,7 +332,7 @@ export function LimitsView({ report, hiddenProviders, loading, refreshing, faile
         <UsageDialog title="使用重置券？"
           subtitle={`这将消耗「${confirming.displayName}」的 1 张重置券并立即清零当前限额窗口，操作不可撤销。`}
           onClose={closeConfirmation}>
-          <div className="limit-confirm-actions">
+          <div className="confirm-actions">
             <button ref={cancelButton} type="button" className="action-button" onClick={closeConfirmation}>取消</button>
             <button type="button" className="action-button primary-action" onClick={() => void confirmReset()}>确认使用</button>
           </div>
@@ -437,7 +437,7 @@ function LimitAccountSegment({ account, now, provider, accountKey, accountCount,
   const open = interaction.openKey === accountKey
 
   return (
-    <button ref={button} type="button" className="limit-segment" aria-label={caption}
+    <button ref={button} type="button" className="limit-segment" aria-label={caption} title={account.displayName}
       aria-controls={interaction.id} aria-expanded={open} data-open={open}
       style={tick ? { '--limit-tick-at': tick } as CSSProperties : undefined}
       data-pace={Boolean(tick)}
@@ -453,10 +453,8 @@ function LimitAccountSegment({ account, now, provider, accountKey, accountCount,
       </span>
       {tick && <span className="limit-pace-tick" aria-hidden="true" />}
       <span className="limit-segment-content" aria-hidden="true">
-        {accountCount > 1 && <>
-          <span className="limit-account-name">{account.displayName}</span>
-          <strong className="limit-account-percent">{Math.round(remaining)}%</strong>
-        </>}
+        <span className="limit-account-name" title={account.displayName}>{account.displayName}</span>
+        {accountCount > 1 && <strong className="limit-account-percent">{Math.round(remaining)}%</strong>}
         {(reset || credits > 0 || account.stale) && <span className="limit-badge">
           {reset && <span className="limit-badge-time">{reset}</span>}
           {credits > 0 && <>
@@ -470,7 +468,7 @@ function LimitAccountSegment({ account, now, provider, accountKey, accountCount,
   )
 }
 
-function LimitDetails({ id, account, provider, now, redeeming, creditButton, onReset }: {
+export function LimitDetails({ id, account, provider, now, redeeming, creditButton, onReset }: {
   id: string
   account: PooledLimitAccount
   provider: UsageProviderKind
@@ -487,12 +485,11 @@ function LimitDetails({ id, account, provider, now, redeeming, creditButton, onR
 
   return (
     <>
-      <h4 id={id}><ProviderMark provider={provider} className="size-4" />{account.displayName}</h4>
-      <dl className="limit-detail-group">
-        {account.plan && <Detail label="套餐">{account.plan}</Detail>}
-        <Detail label="来源">{accountOriginLabels[account.origin]}</Detail>
-      </dl>
-      <dl className="limit-detail-group">
+      <h4 id={id}>
+        <ProviderMark provider={provider} className="size-4" />
+        <span className="limit-account-name" title={account.displayName}>{account.displayName}</span>
+      </h4>
+      <dl className="limit-metrics">
         <Detail label="剩余">{formatLimitPercent(account.remainingPercent)}</Detail>
         {resetAt && <Detail label="重置时间"><time dateTime={account.resetsAt}>{resetAt}</time></Detail>}
         {timeLeft !== null && <Detail label="匀速进度">此时应剩余 {Math.round(timeLeft)}%</Detail>}
@@ -500,6 +497,7 @@ function LimitDetails({ id, account, provider, now, redeeming, creditButton, onR
         {account.stale && <Detail label="缓存数据">
           {checkedAt ? <time dateTime={account.checkedAt}>{checkedAt}</time> : '时间未知'}
         </Detail>}
+        {account.plan && <Detail label="套餐">{account.plan}</Detail>}
       </dl>
       {(credits > 0 || redeeming) && <div className="limit-detail-group limit-reset-row">
         <span>{resetCreditText(credits, account.resetCreditsExpiresAt, now)}</span>

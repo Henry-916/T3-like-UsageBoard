@@ -92,7 +92,7 @@ async function fromCli(
   let step = 1
   return await exchangeCli<LimitsProbeResult>(
     executable, ['app-server'], cliEnvironment('CODEX_HOME', dataDir), ctx.signal,
-    { id: 1, method: 'initialize', params: { clientInfo: { name: 'usage-dashboard', version: APP_VERSION } } },
+    { id: 1, method: 'initialize', params: { clientInfo: { name: 't3-like-usageboard', version: APP_VERSION } } },
     (frame, send) => {
       if (frame.id !== step) return
       const result = record(frame.result)

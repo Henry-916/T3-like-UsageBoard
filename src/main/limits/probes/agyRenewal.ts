@@ -114,7 +114,7 @@ function acp(
     send(1, 'initialize', {
       protocolVersion: 2,
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-      clientInfo: { name: 't3-code', title: 'UsageDashboard', version: APP_VERSION }
+      clientInfo: { name: 't3-code', title: 'T3-like UsageBoard', version: APP_VERSION }
     })
   })
 }

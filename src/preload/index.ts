@@ -3,6 +3,7 @@ import { usageChannels } from '../shared/ipc'
 import type { UsageApi } from '../shared/ipc'
 import type { AccountLoginState, LimitsReport } from '../shared/limitsTypes'
 import type { UpdateState } from '../shared/updateTypes'
+import type { UiPreferences } from '../shared/types'
 
 const usageApi: UsageApi = {
   minimize: () => ipcRenderer.invoke(usageChannels.minimize),
@@ -22,6 +23,7 @@ const usageApi: UsageApi = {
   consumeResetCredit: accountId => ipcRenderer.invoke(usageChannels.consumeResetCredit, accountId),
   getAccounts: () => ipcRenderer.invoke(usageChannels.accounts),
   addManualAccount: input => ipcRenderer.invoke(usageChannels.addAccount, input),
+  switchAccount: id => ipcRenderer.invoke(usageChannels.switchAccount, id),
   updateAccount: (id, changes) => ipcRenderer.invoke(usageChannels.updateAccount, id, changes),
   removeManualAccount: id => ipcRenderer.invoke(usageChannels.removeAccount, id),
   removeAccount: id => ipcRenderer.invoke(usageChannels.removeAccount, id),
@@ -49,6 +51,13 @@ const usageApi: UsageApi = {
   setScanT3: enabled => ipcRenderer.invoke(usageChannels.setScanT3, enabled),
   getUiPreferences: () => ipcRenderer.invoke(usageChannels.preferences),
   saveUiPreferences: changes => ipcRenderer.invoke(usageChannels.savePreferences, changes),
+  trayResize: height => ipcRenderer.invoke(usageChannels.trayResize, height),
+  trayOpenMain: () => ipcRenderer.invoke(usageChannels.trayOpenMain),
+  onUiPreferencesUpdate(listener) {
+    const handler = (_event: unknown, preferences: UiPreferences) => listener(preferences)
+    ipcRenderer.on(usageChannels.preferencesUpdated, handler)
+    return () => ipcRenderer.removeListener(usageChannels.preferencesUpdated, handler)
+  },
   onLimitsUpdated(listener) {
     const handler = (_event: unknown, report: LimitsReport) => listener(report)
     ipcRenderer.on(usageChannels.limitsUpdated, handler)

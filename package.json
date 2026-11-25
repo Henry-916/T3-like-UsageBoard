@@ -1,12 +1,12 @@
 {
-  "name": "usage-dashboard",
-  "version": "0.4.1",
+  "name": "t3-like-usageboard",
+  "version": "0.5.0",
   "private": true,
-  "description": "独立的 Windows AI 用量看板",
+  "description": "T3-like UsageBoard：独立的 Windows AI 用量与额度看板",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Henry-916/UsageDashboard.git"
+    "url": "https://github.com/Henry-916/T3-like-UsageBoard.git"
   },
   "main": "./out/main/index.js",
   "packageManager": "pnpm@12.10.1",

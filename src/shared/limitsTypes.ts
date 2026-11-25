@@ -28,11 +28,13 @@ export interface LimitsProbeContext {
   signal: AbortSignal
   fetch: typeof globalThis.fetch
   readCredential: (path: string) => Promise<unknown>
+  reportEmail?: (email: string) => Promise<void>
   manualApiKey?: string
 }
 
 export type AccountOrigin = 'native' | 't3' | 'manual'
 export interface LimitAccountReading {
+  current?: boolean
   id: string
   provider: UsageProviderKind
   displayName: string
@@ -72,6 +74,8 @@ export interface ConsumeResetCreditResult {
 }
 
 export interface AccountView {
+  current?: boolean
+  canSwitch?: boolean
   id: string
   provider: UsageProviderKind
   displayName: string
@@ -106,12 +110,12 @@ export const startAccountLoginSchema = z.object({
 export type StartAccountLoginInput = z.infer<typeof startAccountLoginSchema>
 export const addManualAccountSchema = z.object({
   provider: providerSchema,
-  displayName: z.string().trim().max(120),
+  displayName: z.string().trim().max(120).optional(),
   mode: z.enum(['directory', 'credential', 'apiKey']),
   apiKey: z.string().trim().min(1).max(8192).optional()
-}).refine(({ provider, mode, apiKey, displayName }) =>
-  mode === 'directory' ? Boolean(displayName) && apiKey === undefined
-    : mode === 'credential' ? Boolean(displayName) && provider === 'antigravity' && apiKey === undefined
+}).refine(({ provider, mode, apiKey }) =>
+  mode === 'directory' ? apiKey === undefined
+    : mode === 'credential' ? provider === 'antigravity' && apiKey === undefined
       : provider === 'opencode' && Boolean(apiKey))
 export type AddManualAccount = z.infer<typeof addManualAccountSchema>
 

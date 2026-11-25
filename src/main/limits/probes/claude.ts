@@ -1,5 +1,6 @@
 import type { LimitsProbeContext, LimitsProbeResult, LimitWindow } from '../../../shared/limitsTypes'
 import type { DiscoveredAccount } from '../../../shared/types'
+import { credentialEmail, normalizeEmail } from '../../accounts/identities'
 import { clamp, cliEnvironment, credentialCandidates, exchangeCli, fingerprint, iso, number, record, resolveCli, safeCliHome, text } from './cli'
 
 const WEEK = 7 * 24 * 60
@@ -93,9 +94,10 @@ async function fromCli(
   const sendRequest = (id: string, request: object) => ({ type: 'control_request', request_id: id, request })
   let expected = 'initialize'
   let identity = credentialIdentity
+  let email: string | undefined
   let plan: string | undefined
   // Same stream-json control protocol used by the Agent SDK. Never send a user message.
-  return await exchangeCli<LimitsProbeResult>(
+  const result = await exchangeCli<LimitsProbeResult>(
     executable,
     ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--await-initialize',
       '--no-session-persistence', '--strict-mcp-config', '--setting-sources', '', '--tools', '',
@@ -114,6 +116,7 @@ async function fromCli(
         const profile = record(value.account)
         if (profile?.apiProvider && profile.apiProvider !== 'firstParty') return { kind: 'unsupported' }
         identity ??= text(profile?.email)?.toLowerCase()
+        email = normalizeEmail(profile?.email)
         plan = text(profile?.subscriptionType)
         expected = 'usage'
         send(sendRequest('usage', { subtype: 'get_usage', skip_behaviors: true }))
@@ -125,6 +128,8 @@ async function fromCli(
       return withAccount(parseWindows(usage), identity, text(value.subscription_type) ?? plan)
     }
   ) ?? { kind: 'failed' }
+  if (email && !ctx.signal.aborted) await ctx.reportEmail?.(email)
+  return result
 }
 
 export async function probeClaude(account: DiscoveredAccount, ctx: LimitsProbeContext): Promise<LimitsProbeResult> {
@@ -135,6 +140,8 @@ export async function probeClaude(account: DiscoveredAccount, ctx: LimitsProbeCo
       const oauth = record(file?.claudeAiOauth)
       const token = text(oauth?.accessToken)
       if (!token) continue
+      const email = credentialEmail('claude', file)
+      if (email) await ctx.reportEmail?.(email)
       const storedIdentity = text(oauth?.accountUuid) ?? text(file?.accountUuid) ??
         text(oauth?.emailAddress)?.toLowerCase()
       const response = await ctx.fetch('https://api.anthropic.com/api/oauth/usage', {

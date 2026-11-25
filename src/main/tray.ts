@@ -1,11 +1,13 @@
 import { isAbsolute } from 'node:path'
 import { app, Menu, Tray } from 'electron'
+import type { Rectangle } from 'electron'
 import { updateConfig } from './configStore'
+import { debounceTrayClick } from './trayPanelPosition'
 import type { UpdateState } from '../shared/updateTypes'
 
 interface TrayActions {
   show(): void
-  toggle(): void
+  togglePanel(bounds: Rectangle): void
   refresh(): void
   updateState(): UpdateState
   update(): void
@@ -13,8 +15,8 @@ interface TrayActions {
 
 export function createTray(iconPath: string, userData: string, actions: TrayActions): Tray & { refreshMenu: () => void } {
   const tray = new Tray(iconPath)
-  tray.setToolTip('UsageDashboard')
-  tray.on('click', actions.toggle)
+  tray.setToolTip('T3-like UsageBoard')
+  tray.on('click', debounceTrayClick(() => actions.togglePanel(tray.getBounds())))
 
   const portable = app.isPackaged && process.env.PORTABLE_EXECUTABLE_FILE
   const path = portable && isAbsolute(portable) && /\.exe$/i.test(portable) ? portable : process.execPath
@@ -43,9 +45,9 @@ export function createTray(iconPath: string, userData: string, actions: TrayActi
             const launchAtLogin = app.getLoginItemSettings(loginItem).openAtLogin
             void updateConfig(userData, config => ({
               ...config, preferences: { ...config.preferences, launchAtLogin }
-            })).catch(() => console.warn('UsageDashboard: unable to save launch preference'))
+            })).catch(() => console.warn('T3-like UsageBoard: unable to save launch preference'))
           } catch {
-            console.warn('UsageDashboard: unable to update start-at-login')
+            console.warn('T3-like UsageBoard: unable to update start-at-login')
           }
           updateMenu()
         }

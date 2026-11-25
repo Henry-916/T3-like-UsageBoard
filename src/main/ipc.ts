@@ -10,6 +10,7 @@ import type { createAccountService } from './accounts/service'
 import type { createLimitsService } from './limits/service'
 import type { createAccountLoginManager } from './accounts/loginManager'
 import type { createUpdater } from './updater'
+import type { createTrayPanel } from './trayPanel'
 
 export function registerIpc(
   getWindow: () => BrowserWindow | undefined,
@@ -19,15 +20,31 @@ export function registerIpc(
   limits: ReturnType<typeof createLimitsService>,
   login: ReturnType<typeof createAccountLoginManager>,
   updater: ReturnType<typeof createUpdater>,
-  openExternal: (url: string) => Promise<void>
+  openExternal: (url: string) => Promise<void>,
+  tray: ReturnType<typeof createTrayPanel>,
+  switchAccount: (id: string) => Promise<AccountsReport>
 ): void {
+  function matches(event: IpcMainInvokeEvent, window: BrowserWindow | undefined): window is BrowserWindow {
+    return !!window && !window.isDestroyed() && event.sender === window.webContents
+      && event.senderFrame === window.webContents.mainFrame
+  }
   function ownWindow(event: IpcMainInvokeEvent): BrowserWindow {
     const window = getWindow()
-    if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) {
-      throw new Error('Untrusted window IPC sender')
-    }
+    if (!matches(event, window)) throw new Error('Untrusted window IPC sender')
     return window
   }
+  function ownTray(event: IpcMainInvokeEvent): void {
+    if (!matches(event, tray.getWindow())) throw new Error('Untrusted tray IPC sender')
+  }
+  function mainOrTray(event: IpcMainInvokeEvent): void {
+    if (!matches(event, getWindow())) ownTray(event)
+  }
+
+  ipcMain.handle(usageChannels.trayResize, (event, height: unknown) => {
+    ownTray(event)
+    if (typeof height === 'number' && Number.isFinite(height)) tray.resize(height)
+  })
+  ipcMain.handle(usageChannels.trayOpenMain, event => { ownTray(event); tray.openMain() })
 
   ipcMain.handle(usageChannels.minimize, (event) => ownWindow(event).minimize())
   ipcMain.handle(usageChannels.isMaximized, event => {
@@ -65,17 +82,22 @@ export function registerIpc(
     return result
   }
   ipcMain.handle(usageChannels.limits, async event => {
-    ownWindow(event)
+    mainOrTray(event)
     await limits.ready
     return limits.get()
   })
-  ipcMain.handle(usageChannels.refreshLimits, event => { ownWindow(event); return limits.refresh() })
+  ipcMain.handle(usageChannels.refreshLimits, event => { mainOrTray(event); return limits.refresh() })
   ipcMain.handle(usageChannels.consumeResetCredit, (event, accountId: unknown) => {
     ownWindow(event)
     if (typeof accountId !== 'string' || !accountId.trim() || accountId.length > 512) throw new Error('账号无效')
     return limits.consumeResetCredit(accountId)
   })
   ipcMain.handle(usageChannels.accounts, event => { ownWindow(event); return accounts.list() })
+  ipcMain.handle(usageChannels.switchAccount, (event, id: unknown) => {
+    ownWindow(event)
+    if (typeof id !== 'string' || !id.trim() || id.length > 512) throw new Error('账号无效。')
+    return switchAccount(id)
+  })
   ipcMain.handle(usageChannels.addAccount, async (event, input: unknown) => {
     ownWindow(event)
     const result = addManualAccountSchema.safeParse(input)
@@ -135,7 +157,7 @@ export function registerIpc(
   ipcMain.handle(usageChannels.downloadUpdate, event => { ownWindow(event); return updater.downloadUpdate() })
   ipcMain.handle(usageChannels.installUpdate, event => { ownWindow(event); return updater.installUpdate() })
   ipcMain.handle(usageChannels.preferences, async event => {
-    ownWindow(event)
+    mainOrTray(event)
     return uiPreferencesSchema.parse((await readConfig(userData)).preferences)
   })
   ipcMain.handle(usageChannels.savePreferences, async (event, input: unknown) => {
@@ -143,5 +165,6 @@ export function registerIpc(
     const parsed = uiPreferencesSchema.safeParse(input)
     if (!parsed.success) throw new Error('Invalid UI preferences')
     await updateConfig(userData, config => ({ ...config, preferences: { ...config.preferences, ...parsed.data } }))
+    tray.send(usageChannels.preferencesUpdated, uiPreferencesSchema.parse((await readConfig(userData)).preferences))
   })
 }

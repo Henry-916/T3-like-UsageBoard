@@ -1,10 +1,10 @@
-appId: com.usage-dashboard.app
-productName: Usage Dashboard
+appId: com.t3-like-usageboard.app
+productName: T3-like UsageBoard
 npmRebuild: false
 publish:
   provider: github
   owner: Henry-916
-  repo: UsageDashboard
+  repo: T3-like-UsageBoard
   releaseType: release
 directories:
   output: dist

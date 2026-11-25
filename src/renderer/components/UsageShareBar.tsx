@@ -1,8 +1,6 @@
 import { formatPercent } from '../../shared/usageFormat'
 import { formatMetric, type ShareSegment, type UsageMetric } from '../usagePresentation'
 
-const color = (intensity: number) => `color-mix(in oklab, var(--color-ink) ${intensity}%, var(--color-canvas))`
-
 export function UsageShareBar({ label, segments, metric }: {
   label: string; segments: readonly ShareSegment[]; metric: UsageMetric
 }) {
@@ -13,15 +11,15 @@ export function UsageShareBar({ label, segments, metric }: {
       <h2 className="section-title">{label}</h2>
       {visible.length > 0 && <div className="share-bar" aria-hidden="true">
         {visible.map((segment) => (
-          <span key={segment.label}
-            style={{ flex: `${segment.value} 1 0`, backgroundColor: color(segment.intensity) }}
+          <span key={segment.label} data-pattern={segment.pattern}
+            style={{ flex: `${segment.value} 1 0`, backgroundColor: segment.color }}
             title={`${segment.label} · ${formatMetric(segment.value, metric)} · ${formatPercent(segment.value / total)}`} />
         ))}
       </div>}
       {visible.length > 0 && <ul className="share-legend" aria-label={label}>
         {visible.map((segment) => (
           <li key={segment.label}>
-            <span className="share-swatch" style={{ backgroundColor: color(segment.intensity) }} aria-hidden="true" />
+            <span className="share-swatch" data-pattern={segment.pattern} style={{ backgroundColor: segment.color }} aria-hidden="true" />
             <span>{segment.label}</span>
             <strong>{formatMetric(segment.value, metric)}</strong>
             <span className="sr-only">，{formatPercent(segment.value / total)}</span>

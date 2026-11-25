@@ -125,7 +125,7 @@
   font-variant-numeric: tabular-nums;
 }
 .limits-view .limit-account-name {
-  min-width: 0;
+  min-inline-size: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -190,8 +190,8 @@
   padding-top: 10px;
   border-top: 1px solid #1f1f1f;
 }
-.limits-view .limit-popover dl.limit-detail-group { display: grid; gap: 4px; }
-.limits-view .limit-popover dl.limit-detail-group > div {
+.limits-view .limit-popover .limit-metrics { display: grid; gap: 4px; margin-top: 8px; }
+.limits-view .limit-popover .limit-metrics > div {
   display: grid;
   grid-template-columns: 4.5rem minmax(0, 1fr);
   gap: 4px 12px;
@@ -219,7 +219,6 @@
 }
 .limits-view .limit-reset-action:hover:not(:disabled) { background: var(--control-active); }
 .limits-view .limit-reset-action:disabled { opacity: .55; }
-.limits-view .limit-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 20px; }
 .limits-view .limit-reset-feedback { color: var(--color-subtle); font-size: 13px; overflow-wrap: anywhere; }
 .limits-view .limit-reset-feedback[data-error="true"] { color: var(--color-error); }
 

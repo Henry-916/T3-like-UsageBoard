@@ -11,6 +11,35 @@ const account: DiscoveredAccount = {
   credentialPaths: ['antigravity-oauth-token', 'acp_token.json']
 }
 
+it('renews only the current slot through CAS, and persists normalized userinfo identity', async () => {
+  const stored = Buffer.from(JSON.stringify({ writer_id: 'fixture', token: { access_token: 'old-fixture', refresh_token: 'before-fixture' } }))
+  const compareAndWriteCurrentCredential = vi.fn(async (_expected: Buffer, _next: Buffer) => true)
+  const readCredential = vi.fn(async () => undefined)
+  const reportEmail = vi.fn(async () => undefined)
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer after-fixture')
+    if (String(input).includes('/oauth2/v2/userinfo')) return Response.json({ id: 'fixture-account', email: ' FIXTURE@Example.COM ' })
+    return Response.json({ buckets: [{ bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0.5 }] })
+  })
+  const probe = createAntigravityProbe({
+    resolveCli: async () => 'fixture-command',
+    renewCliToken: async () => ({ kind: 'ok', token: { accessToken: 'after-fixture', refreshToken: 'rotated-fixture', expiry: '2099-01-01T00:00:00Z', updatedAt: 0 } }),
+    compareAndWriteCurrentCredential
+  })
+  const current = { ...account, origin: 'native' as const, current: true, currentCredential: stored }
+  const ctx = { fetch, readCredential, reportEmail, signal: new AbortController().signal }
+  expect((await probe(current, ctx)).kind).toBe('ok')
+  expect(readCredential).not.toHaveBeenCalled()
+  const [expected, next] = compareAndWriteCurrentCredential.mock.calls[0]
+  expect(expected).toEqual(stored)
+  expect(JSON.parse(next.toString())).toMatchObject({ writer_id: 'fixture', token: { refresh_token: 'rotated-fixture' } })
+  expect(reportEmail).toHaveBeenCalledWith('fixture@example.com')
+  fetch.mockClear()
+  compareAndWriteCurrentCredential.mockResolvedValueOnce(false)
+  expect(await probe(current, ctx)).toEqual({ kind: 'failed' })
+  expect(fetch).not.toHaveBeenCalled()
+})
+
 it('refreshes ACP in memory, merges business-first quotas, and hashes the Google identity', async () => {
   const signal = new AbortController().signal
   const readCredential = vi.fn(async () => ({

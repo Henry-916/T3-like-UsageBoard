@@ -69,7 +69,8 @@ export async function discoverAccounts(
       add({
         id: `native:${provider}:${createHash('sha256').update(pathKey(dataDir)).digest('hex').slice(0, 20)}`,
         provider, origin: 'native', displayName: providerNames[provider], enabled: true,
-        dataDir, credentialPaths: credentials[provider].map(name => join(dataDir, name))
+        dataDir, credentialPaths: credentials[provider].map(name => join(dataDir, name)),
+        ...(provider === 'codex' ? { current: true } : {})
       })
     }
     if (provider === 'opencode' && !seen.size && env.OPENCODE_API_KEY?.trim()) {

@@ -143,7 +143,7 @@ export function createCodexResetCreditConsumer() {
       let attempt = previous
       const outcome = await exchangeCli<ConsumeResetCreditOutcome | false>(
         executable, ['app-server'], cliEnvironment('CODEX_HOME', dataDir), signalFor(ctx),
-        { id: 1, method: 'initialize', params: { clientInfo: { name: 'usage-dashboard', version: APP_VERSION } } },
+        { id: 1, method: 'initialize', params: { clientInfo: { name: 't3-like-usageboard', version: APP_VERSION } } },
         (frame, send) => {
           if (frame.id !== step) return
           const result = record(frame.result)

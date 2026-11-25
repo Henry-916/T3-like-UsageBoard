@@ -178,7 +178,7 @@ export function createUsageService({ userData, fallbackRates, home, env, now = D
           : scannedFiles || skippedFiles || merged.length ? 'ok' : 'missing'
       })
     }
-    if (dirty) await writeScanCache(userData, cache).catch(() => console.warn('UsageDashboard: unable to save scan cache'))
+    if (dirty) await writeScanCache(userData, cache).catch(() => console.warn('T3-like UsageBoard: unable to save scan cache'))
     return { byProvider, sources, pricing, readAt, elapsed: Math.round(performance.now() - started) }
   }
 

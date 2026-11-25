@@ -1,4 +1,4 @@
-import { Check, ChevronDown, LoaderCircle, Pencil, Plus, Trash2 } from 'lucide-react'
+import { Check, ChevronDown, LoaderCircle, Plus, Trash2 } from 'lucide-react'
 import {
   useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent
 } from 'react'
@@ -8,7 +8,6 @@ import { createAccountLoginSession, loginFailureMessage, loginInProgress } from 
 import { useAccountsData } from '../hooks/useAccountsData'
 import { useAuthorizationCopy } from '../hooks/useAuthorizationCopy'
 import type { UpdateControls } from '../hooks/useUpdates'
-import { accountOriginLabels } from '../limitsPresentation'
 import { updateActionLabel, updateStatusLabel, versionLabel } from '../updatePresentation'
 import { providerInfo, providers } from '../usagePresentation'
 import { ProviderMark } from './ProviderMark'
@@ -16,12 +15,36 @@ import { UsageDialog } from './UsageDialog'
 
 type LoginSession = ReturnType<typeof createAccountLoginSession>
 
+const rollbackFailed = '切换失败，且无法恢复原凭证或项目缓存。请停止操作并使用备份恢复。'
+const switchErrors = new Set([
+  rollbackFailed,
+  '应用未能重启，已恢复原账号。',
+  '无法写入新凭证，已恢复原账号。',
+  '无法确认或备份当前账号，未切换。',
+  '无法验证目标凭证或关闭对应应用，未切换。',
+  '目标账号或凭证不可用，请刷新后重试。',
+  '无法读取目标账号凭证。',
+  '默认凭证或项目缓存路径不安全，未切换。',
+  '当前无法切换账号。',
+  '正在切换账号，请稍候。'
+])
+
+export function accountSwitchErrorMessage(error: unknown): string {
+  const message = error instanceof Error
+    ? error.message.replace(/^Error invoking remote method 'usage:switch-account': (?:Error: )?/, '')
+    : ''
+  return switchErrors.has(message) ? message : '无法切换账号。请确认本机登录状态后再试。'
+}
+
 export function AccountsDialog({ onClose, onChanged, updates }: {
   onClose: () => void; onChanged: () => void; updates: UpdateControls
 }) {
   const { report, loading, busy, error, read, mutate } = useAccountsData(onChanged)
   const [adding, setAdding] = useState(false)
-  const [editing, setEditing] = useState<{ id: string; mode: 'rename' | 'remove' } | null>(null)
+  const [removingId, setRemovingId] = useState<string | null>(null)
+  const [switchTarget, setSwitchTarget] = useState<AccountView | null>(null)
+  const [switchError, setSwitchError] = useState('')
+  const switchBlocked = switchError === rollbackFailed
   const [focusTarget, setFocusTarget] = useState<{ id?: string } | null>(null)
   const [login] = useState(() => createAccountLoginSession(window.usageApi))
   const loginSnapshot = useSyncExternalStore(login.subscribe, login.getSnapshot)
@@ -84,7 +107,29 @@ export function AccountsDialog({ onClose, onChanged, updates }: {
     } else closing.current = false
   }
 
+  function openSwitch(account: AccountView) {
+    if (switchBlocked) return
+    setRemovingId(null)
+    setSwitchError('')
+    setSwitchTarget(account)
+  }
+
+  async function confirmSwitch() {
+    if (!switchTarget || busy || switchBlocked) return
+    const { id } = switchTarget
+    setSwitchError('')
+    if (await mutate(
+      () => window.usageApi.switchAccount(id),
+      accountSwitchErrorMessage,
+      setSwitchError
+    )) {
+      setSwitchTarget(null)
+      setFocusTarget({ id })
+    }
+  }
+
   return (
+    <>
     <UsageDialog title="账号管理" onClose={() => void closeDialog()} busy={busy}>
       <div className="dialog-body accounts-body" aria-busy={loading || busy}>
         <div className="accounts-toolbar">
@@ -102,7 +147,7 @@ export function AccountsDialog({ onClose, onChanged, updates }: {
               if (showAdd) void closeAdd()
               else {
                 login.clearFeedback()
-                setEditing(null)
+                setRemovingId(null)
                 setAdding(true)
               }
             }}>
@@ -111,9 +156,9 @@ export function AccountsDialog({ onClose, onChanged, updates }: {
         </div>
         {showAdd && (
           <AddAccountForm busy={busy} onCancel={() => void closeAdd()} login={login} snapshot={loginSnapshot}
-            addKey={async (displayName, apiKey) => {
+            addKey={async (apiKey) => {
               if (await mutate(
-                () => window.usageApi.addManualAccount({ provider: 'opencode', displayName, mode: 'apiKey', apiKey }),
+                () => window.usageApi.addManualAccount({ provider: 'opencode', mode: 'apiKey', apiKey }),
                 '无法添加账号，请检查 Go API Key 后重试。'
               )) {
                 setAdding(false)
@@ -125,19 +170,20 @@ export function AccountsDialog({ onClose, onChanged, updates }: {
           <p>{error}</p>
           {!report && <button type="button" className="action-button" onClick={() => void read()}>重试</button>}
         </div>}
+        {switchBlocked && !switchTarget && <p className="accounts-error" role="alert">{switchError}</p>}
         {!report && loading ? <p className="price-placeholder" role="status">正在读取账号…</p> :
           report && (report.accounts.length === 0 ? <p className="price-placeholder">未发现账号</p> :
             <ul ref={list} className="account-list" aria-label="账号">
               {report.accounts.map((account, index) => (
                 <AccountRow key={account.id} account={account} busy={locked || showAdd}
-                  editing={editing?.id === account.id ? editing.mode : null}
-                  setEditing={(mode) => setEditing(mode ? { id: account.id, mode } : null)}
+                  removing={removingId === account.id}
+                  setRemoving={(open) => setRemovingId(open ? account.id : null)}
+                  onSwitch={() => openSwitch(account)} switchBlocked={switchBlocked}
                   onToggle={(enabled) => mutate(() => window.usageApi.updateAccount(account.id, { enabled }), '无法更新账号状态。')}
-                  onRename={(displayName) => mutate(() => window.usageApi.updateAccount(account.id, { displayName }), '无法重命名账号。')}
                   onRemove={async () => {
                     if (await mutate(() => window.usageApi.removeAccount(account.id),
                       account.origin === 'manual' ? '无法删除此账号。' : '无法移除此账号。')) {
-                      setEditing(null)
+                      setRemovingId(null)
                       setFocusTarget({ id: report.accounts[index + 1]?.id })
                     }
                   }} />
@@ -166,26 +212,63 @@ export function AccountsDialog({ onClose, onChanged, updates }: {
         </button>
       </footer>
     </UsageDialog>
+    {switchTarget && <SwitchAccountConfirmation account={switchTarget} busy={busy} error={switchError}
+      onCancel={() => setSwitchTarget(null)} onConfirm={() => void confirmSwitch()} />}
+    </>
   )
 }
 
-function AccountRow({ account, busy, editing, setEditing, onToggle, onRename, onRemove }: {
+export function SwitchAccountConfirmation({ account, busy, error, onCancel, onConfirm }: {
   account: AccountView
   busy: boolean
-  editing: 'rename' | 'remove' | null
-  setEditing: (mode: 'rename' | 'remove' | null) => void
+  error: string
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const cancel = useRef<HTMLButtonElement>(null)
+  const descriptionId = useId()
+  const app = providerInfo[account.provider].label
+
+  useLayoutEffect(() => {
+    if (!busy) cancel.current?.focus({ preventScroll: true })
+  }, [busy])
+
+  return (
+    <UsageDialog title="切换账号？" onClose={onCancel} busy={busy}>
+      <div className="account-switch-description" id={descriptionId}>
+        <p className="account-switch-target" title={account.displayName}>{account.displayName}</p>
+        <p>切换将写入本机默认凭证，并自动重启正在运行的 {app} App。正在运行的命令行会话需要手动重开或刷新。</p>
+      </div>
+      {error && <p className="accounts-error account-switch-error" role="alert">{error}</p>}
+      <div className="confirm-actions">
+        <button ref={cancel} className="action-button" type="button" autoFocus disabled={busy} onClick={onCancel}>取消</button>
+        <button className="action-button primary-action" type="button" disabled={busy || error === rollbackFailed}
+          aria-describedby={descriptionId} onClick={onConfirm}>
+          {busy ? '正在切换…' : '确认切换'}
+        </button>
+        {busy && <span role="status" className="sr-only">正在切换账号…</span>}
+      </div>
+    </UsageDialog>
+  )
+}
+
+export function AccountRow({ account, busy, removing, setRemoving, onSwitch, switchBlocked = false, onToggle, onRemove }: {
+  account: AccountView
+  busy: boolean
+  removing: boolean
+  setRemoving: (open: boolean) => void
+  onSwitch: () => void
+  switchBlocked?: boolean
   onToggle: (enabled: boolean) => Promise<boolean>
-  onRename: (name: string) => Promise<boolean>
   onRemove: () => Promise<void>
 }) {
-  const renameTrigger = useRef<HTMLButtonElement>(null)
   const removeTrigger = useRef<HTMLButtonElement>(null)
   const manual = account.origin === 'manual'
   const removeLabel = manual ? '删除' : '移除'
-  function closeEditor() {
-    const trigger = editing === 'rename' ? renameTrigger : removeTrigger
-    setEditing(null)
-    requestAnimationFrame(() => trigger.current?.focus())
+  const switchable = !account.current && account.canSwitch && (account.provider === 'codex' || account.provider === 'antigravity')
+  function cancelRemove() {
+    setRemoving(false)
+    removeTrigger.current?.focus()
   }
 
   return (
@@ -193,44 +276,32 @@ function AccountRow({ account, busy, editing, setEditing, onToggle, onRename, on
       <div className="account-line">
         <ProviderMark provider={account.provider} className="size-[17px]" />
         <div className="account-ident">
-          <strong title={account.displayName}>{account.displayName}</strong>
-          <span>{providerInfo[account.provider].label} · {accountOriginLabels[account.origin]}</span>
-          {account.dataDir && <span className="account-directory" title={account.dataDir}>{account.dataDir}</span>}
+          <strong>{providerInfo[account.provider].label}</strong>
+          <div className="account-email-line">
+            <span className="account-email" title={account.displayName}>{account.displayName}</span>
+            {account.current && <span className="account-current-badge">当前</span>}
+          </div>
         </div>
-        <label className="account-toggle">
-          <input type="checkbox" role="switch" aria-label={`启用 ${account.displayName}`}
-            checked={account.enabled} disabled={busy} onChange={(event) => void onToggle(event.currentTarget.checked)} />
-        </label>
-        <button ref={renameTrigger} className="icon-button" type="button" disabled={busy}
-          aria-label={`重命名 ${account.displayName}`} title="重命名" aria-expanded={editing === 'rename'}
-          onClick={() => setEditing(editing === 'rename' ? null : 'rename')}>
-          <Pencil size={15} aria-hidden="true" />
-        </button>
-        <button ref={removeTrigger} className="icon-button account-remove" type="button" disabled={busy}
-          data-account-action={account.id} aria-label={`${removeLabel} ${account.displayName}`} title={removeLabel} aria-expanded={editing === 'remove'}
-          onClick={() => setEditing(editing === 'remove' ? null : 'remove')}>
-          <Trash2 size={15} aria-hidden="true" />
-        </button>
+        <div className="account-actions">
+          {switchable && <button className="action-button account-switch" type="button" disabled={busy || switchBlocked}
+            aria-haspopup="dialog" aria-label={`设为当前：${account.displayName}`} onClick={onSwitch}>设为当前</button>}
+          <label className="account-toggle">
+            <input type="checkbox" role="switch" aria-label={`启用 ${account.displayName}`}
+              checked={account.enabled} disabled={busy} onChange={(event) => void onToggle(event.currentTarget.checked)} />
+          </label>
+          <button ref={removeTrigger} className="icon-button account-remove" type="button" disabled={busy}
+            data-account-action={account.id} aria-label={`${removeLabel} ${account.displayName}`} title={removeLabel}
+            aria-expanded={removing} onClick={() => setRemoving(!removing)}>
+            <Trash2 size={15} aria-hidden="true" />
+          </button>
+        </div>
       </div>
-      {editing === 'rename' && (
-        <form className="account-editor" onSubmit={async (event) => {
-          event.preventDefault()
-          const name = String(new FormData(event.currentTarget).get('displayName') ?? '').trim()
-          if (name && (name === account.displayName || await onRename(name))) closeEditor()
-        }}>
-          <input aria-label="显示名" className="price-field" name="displayName" maxLength={120}
-            defaultValue={account.displayName} required autoFocus disabled={busy}
-            onFocus={(event) => event.currentTarget.select()} />
-          <button className="action-button" type="button" disabled={busy} onClick={closeEditor}>取消</button>
-          <button className="action-button primary-action" type="submit" disabled={busy}>保存</button>
-        </form>
-      )}
-      {editing === 'remove' && (
+      {removing && (
         <div className="account-editor">
           <p className="min-w-0 grow break-words text-subtle">{manual
             ? `删除「${account.displayName}」并清除已保存的登录凭证？`
             : `从列表移除「${account.displayName}」？（不会改动本机原登录文件）`}</p>
-          <button className="action-button" type="button" autoFocus disabled={busy} onClick={closeEditor}>取消</button>
+          <button className="action-button" type="button" autoFocus disabled={busy} onClick={cancelRemove}>取消</button>
           <button className="action-button remove-action" type="button" disabled={busy} onClick={() => void onRemove()}>{removeLabel}</button>
         </div>
       )}
@@ -375,7 +446,7 @@ function AddAccountForm({ busy, onCancel, login, snapshot, addKey }: {
   onCancel: () => void
   login: LoginSession
   snapshot: ReturnType<LoginSession['getSnapshot']>
-  addKey: (displayName: string, apiKey: string) => Promise<void>
+  addKey: (apiKey: string) => Promise<void>
 }) {
   const { state, cancelling, submitting, error } = snapshot
   const active = loginInProgress(state)
@@ -419,16 +490,15 @@ function AddAccountForm({ busy, onCancel, login, snapshot, addKey }: {
     }
     if (active || state.phase === 'succeeded') return
     setLinkError('')
-    const displayName = String(new FormData(event.currentTarget).get('displayName') ?? '').trim()
     if (provider === 'opencode') {
       const input = keyField.current
       const apiKey = input?.value.trim()
       if (input && apiKey) {
         input.value = ''
-        void addKey(displayName, apiKey)
+        void addKey(apiKey)
       } else input?.focus()
     } else {
-      void login.start({ provider, ...(displayName ? { displayName } : {}) })
+      void login.start({ provider })
     }
   }
 
@@ -445,17 +515,11 @@ function AddAccountForm({ busy, onCancel, login, snapshot, addKey }: {
 
   return (
     <form className="account-add-form" onSubmit={onSubmit} autoComplete="off">
-      <div className="account-add-grid">
-        <ProviderSelect value={provider} disabled={busy || active || cancelling} onChange={(next) => {
-          setSelected(next)
-          setLinkError('')
-          login.clearFeedback()
-        }} />
-        <label>显示名（选填）
-          <input className="price-field" name="displayName" maxLength={120} disabled={busy || active || cancelling}
-            placeholder={providerInfo[provider].label} />
-        </label>
-      </div>
+      <ProviderSelect value={provider} disabled={busy || active || cancelling} onChange={(next) => {
+        setSelected(next)
+        setLinkError('')
+        login.clearFeedback()
+      }} />
       {provider === 'opencode' && <label>Go API Key
         <input ref={keyField} className="price-field" type="password" autoComplete="off"
           spellCheck={false} maxLength={8192} required disabled={busy} />

@@ -190,7 +190,7 @@ export function createAccountLoginManager(options: LoginOptions) {
       if (signal.aborted) abort()
       else if (provider === 'codex') {
         try {
-          write({ id: 1, method: 'initialize', params: { clientInfo: { name: 'usage-dashboard', version: options.version ?? APP_VERSION } } })
+          write({ id: 1, method: 'initialize', params: { clientInfo: { name: 't3-like-usageboard', version: options.version ?? APP_VERSION } } })
         } catch { finish(false) }
       } else if (provider === 'claude') publish(flow, 'waiting_browser')
     })

@@ -1,7 +1,7 @@
-import { createElement, type ComponentProps } from 'react'
+import { createElement, createRef, type ComponentProps } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { LimitsView } from '../src/renderer/components/LimitsView'
+import { LimitDetails, LimitsView } from '../src/renderer/components/LimitsView'
 import {
   limitIssueText, limitTimeLeft, resetBadgeDuration, resetCreditText, resetDetailTime, visibleLimitIssues
 } from '../src/renderer/limitsPresentation'
@@ -141,23 +141,23 @@ describe('LimitsView segments', () => {
     windowDurationMins: 300, resetsAt: after(199)
   } as const
   const codex = {
-    id: 'codex-1', displayName: '原生 Codex', provider: 'codex', origin: 'native',
+    id: 'codex-1', displayName: 'codex@example.com', provider: 'codex', origin: 'native',
     stale: true, checkedAt: after(0), resetCredits: 2, windows: [window]
   } as const
-  const agy = { ...codex, id: 'agy-1', displayName: '工作 Antigravity', provider: 'antigravity' } as const
+  const agy = { ...codex, id: 'agy-1', displayName: 'work@example.com', provider: 'antigravity' } as const
 
-  it('keeps one shared layer, hides repeated single-account text and shows only Codex credits', () => {
+  it('keeps one shared layer, shows every account email, and shows only Codex credits', () => {
     vi.useFakeTimers()
     vi.setSystemTime(fixedNow)
     try {
       const html = renderView({ report: { ...report, accounts: [
         { ...codex, windows: [window] }, { ...agy, windows: [window] },
-        { ...agy, id: 'agy-2', displayName: '备用 Antigravity', windows: [{ ...window, usedPercent: 0 }] }
+        { ...agy, id: 'agy-2', displayName: 'backup@example.com', windows: [{ ...window, usedPercent: 0 }] }
       ] } })
       expect(html.match(/popover="auto"/g)).toHaveLength(1)
-      expect(html.match(/class="limit-account-name"/g)).toHaveLength(2)
-      expect(html).not.toContain('class="limit-account-name">原生 Codex')
-      expect(html).toContain('class="limit-account-name">工作 Antigravity')
+      expect(html.match(/class="limit-account-name"/g)).toHaveLength(3)
+      expect(html).toContain('class="limit-account-name" title="codex@example.com">codex@example.com')
+      expect(html).toContain('class="limit-account-name" title="work@example.com">work@example.com')
       expect(html.match(/class="limit-recovery"/g)).toHaveLength(1)
       expect(html.match(/class="limit-badge-credit"/g)).toHaveLength(1)
       expect(html).toContain('↻ 3 小时 19 分钟')
@@ -166,5 +166,22 @@ describe('LimitsView segments', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('puts quota metrics directly after the email header, without a source row or divider', () => {
+    const html = renderToStaticMarkup(createElement(LimitDetails, {
+      id: 'details', provider: 'antigravity', now: fixedNow, redeeming: false,
+      creditButton: createRef<HTMLButtonElement>(), onReset: vi.fn(),
+      account: {
+        id: 'work', displayName: agy.displayName, origin: 't3', checkedAt: after(0), stale: false,
+        capacitySharePercent: 50, remainingPercent: 55, recoveryPercent: 8, resetStatus: 'upcoming',
+        resetsAt: window.resetsAt, windowDurationMins: window.windowDurationMins
+      }
+    }))
+    expect(html).toContain('title="work@example.com">work@example.com</span></h4><dl class="limit-metrics"><div><dt>剩余')
+    expect(html).toContain('<dt>重置时间</dt>')
+    expect(html).toContain('<dt>匀速进度</dt>')
+    expect(html).toContain('<dt>恢复</dt>')
+    expect(html).not.toMatch(/来源|limit-detail-group/)
   })
 })

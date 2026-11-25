@@ -97,23 +97,27 @@ export const metricValue = (values: UsageFigures, metric: UsageMetric) => metric
 export const formatMetric = (value: number, metric: UsageMetric) => metric === 'cost' ? formatUsd(value) : formatTokens(value)
 export const formatUsageCost = (values: UsageFigures) => values.costUnknown ? '未定价' : formatUsd(values.costUsd)
 
-export interface ShareSegment { label: string; value: number; intensity: number }
+export type ShareSegment = { label: string; value: number } & (
+  { color: string; pattern?: never } | { color?: never; pattern: 'hatch' }
+)
+
+const shareMix = (strength: number) => `color-mix(in srgb, var(--color-ink) ${strength}%, var(--color-canvas))`
+const shareColors = { input: shareMix(70), cacheRead: shareMix(25), cacheWrite: shareMix(45), output: '#f4f4f5' }
 
 export function usageSegments(values: UsageFigures, metric: UsageMetric): ShareSegment[] {
   const { totals, categoryCostUsd: cost } = values
-  return metric === 'cost'
-    ? [
-        { label: '输入框', value: cost.input, intensity: 60 },
-        { label: '缓存读取', value: cost.cacheRead, intensity: 30 },
-        { label: '缓存写入', value: cost.cacheWrite, intensity: 72 },
-        { label: '输出', value: cost.output, intensity: 100 },
-        // Ignore floating-point noise when all costs are already allocated.
-        { label: '其他', value: Math.max(0, Number((values.costUsd - cost.input - cost.cacheRead - cost.cacheWrite - cost.output).toFixed(8))), intensity: 44 }
-      ]
-    : [
-        { label: '输入框', value: totals.uncachedInputTokens, intensity: 60 },
-        { label: '缓存读取', value: totals.cachedInputTokens, intensity: 30 },
-        { label: '缓存写入', value: totals.cacheCreationTokens, intensity: 72 },
-        { label: '输出', value: totals.outputTokens, intensity: 100 }
-      ]
+  const isCost = metric === 'cost'
+  const segments: ShareSegment[] = [
+    { label: '输入', value: isCost ? cost.input : totals.uncachedInputTokens, color: shareColors.input },
+    { label: '缓存读取', value: isCost ? cost.cacheRead : totals.cachedInputTokens, color: shareColors.cacheRead },
+    { label: '缓存写入', value: isCost ? cost.cacheWrite : totals.cacheCreationTokens, color: shareColors.cacheWrite },
+    { label: '输出', value: isCost ? cost.output : totals.outputTokens, color: shareColors.output }
+  ]
+  if (isCost) segments.push({
+    label: '未拆分',
+    // Ignore floating-point noise when all costs are already allocated.
+    value: Math.max(0, Number((values.costUsd - cost.input - cost.cacheRead - cost.cacheWrite - cost.output).toFixed(8))),
+    pattern: 'hatch'
+  })
+  return segments
 }
