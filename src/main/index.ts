@@ -242,7 +242,7 @@ if (!app.requestSingleInstanceLock()) {
       void prepareQuitForUpdate().then(() => app.quit())
     })
     app.on('will-quit', updater.stop)
-    registerIpc(() => panel, userData, usage.getSummary, accounts, limits, login, updater, openExternal, trayPanel, switchAccount)
+    registerIpc(() => panel, userData, usage.getSummary, accounts, limits, login, updater, openExternal, trayPanel, switchAccount, usage.getPricePresets)
     createPanel()
     tray = createTray(trayIconPath, userData, {
       show: trayPanel.openMain,

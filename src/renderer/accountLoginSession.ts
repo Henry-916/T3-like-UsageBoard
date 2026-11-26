@@ -13,15 +13,17 @@ export function loginInProgress(state: AccountLoginState) {
     state.phase === 'waiting_code' || state.phase === 'verifying'
 }
 
-const missingCli = {
-  antigravity: '未检测到 Antigravity CLI（agy），请先安装 Antigravity 后再登录。',
+export const missingCliMessages = {
+  antigravity: '未检测到 Antigravity CLI（agy），请先安装 Antigravity CLI 后再登录。',
   codex: '未检测到 Codex CLI（codex），请先安装 Codex CLI 后再登录。',
-  claude: '未检测到 Claude Code CLI（claude），请先安装 Claude Code 后再登录。'
-}
+  claude: '未检测到 Claude Code CLI（claude），请先安装 Claude Code CLI 后再登录。'
+} as const
 
 export function loginFailureMessage(state: AccountLoginState): string {
   const provider = state.provider
-  if (provider && provider !== 'opencode' && state.message === missingCli[provider]) return missingCli[provider]
+  if (provider && provider !== 'opencode' && state.message === missingCliMessages[provider]) {
+    return missingCliMessages[provider]
+  }
   if (state.message === '登录已超时，请重试。') return '登录已超时，请重试。'
   return '未能完成登录，请重试。'
 }

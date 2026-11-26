@@ -1,4 +1,4 @@
-import type { PricingSettings, UiPreferences, UsageSummary, UsageSummaryInput } from './types'
+import type { PricePreset, PricingSettings, UiPreferences, UsageSummary, UsageSummaryInput } from './types'
 import type { AccountChanges, AccountLoginState, AccountsReport, AddManualAccount, ConsumeResetCreditResult, LimitsReport, StartAccountLoginInput } from './limitsTypes'
 import type { UpdateState } from './updateTypes'
 
@@ -11,6 +11,7 @@ export const usageChannels = {
   refreshRequested: 'usage:refresh-requested',
   summary: 'usage:get-summary',
   pricingSettings: 'usage:get-pricing-settings',
+  pricePresets: 'usage:get-price-presets',
   savePricing: 'usage:save-pricing-settings',
   limits: 'usage:get-limits',
   refreshLimits: 'usage:refresh-limits',
@@ -51,6 +52,7 @@ export interface UsageApi {
   hide(): Promise<void>
   getSummary(query: UsageSummaryInput, refresh?: boolean): Promise<UsageSummary>
   getPricingSettings(): Promise<PricingSettings>
+  getPricePresets(): Promise<PricePreset[]>
   savePricingSettings(settings: PricingSettings): Promise<void>
   onRefreshRequested(listener: () => void): () => void
   getLimits(): Promise<LimitsReport>

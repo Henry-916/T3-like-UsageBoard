@@ -35,7 +35,7 @@ describe('usage chart columns', () => {
       record('2026-11-01T05:45:00Z', { provider: 'claude' }),
       record('2026-11-01T06:45:00Z'),
       record('2026-11-01T07:30:15Z')
-    ], query, priced, {}, {})
+    ], query, priced, {})
     expect(buckets.slice(0, 2).map(({ day }) => day)).toEqual(['2026-10-31', '2026-11-01'])
     const { columns, providers } = buildUsageChartColumns(buckets, query, 'tokens')
     expect(providers.map(({ id }) => id)).toEqual(['codex', 'claude'])
@@ -64,7 +64,7 @@ describe('usage chart columns', () => {
     }
     const buckets = aggregateUsage([
       record('2026-07-01T17:32:59.999Z'), record(query.untilTime!)
-    ], query, pricing, {}, {})
+    ], query, pricing, {})
     expect(buildUsageChartColumns(buckets, query, 'tokens').columns.map(({ period, total }) => [period, total]))
       .toEqual([['2026-07-01T16:17:00.000Z', 0], ['2026-07-01T17:17:00.000Z', 100]])
   })
@@ -79,7 +79,7 @@ describe('usage chart columns', () => {
       record('2026-03-09T03:59:59.999Z', { provider: 'opencode' }),
       record('2026-03-11T03:59:59.999Z'),
       record('2026-03-11T04:00:00Z')
-    ], query, pricing, {}, {})
+    ], query, pricing, {})
     expect(buildUsageChartColumns(buckets, query, 'tokens').columns.map(({ period, total }) => [period, total]))
       .toEqual([['2026-03-07', 100], ['2026-03-08', 100], ['2026-03-09', 0], ['2026-03-10', 100]])
   })
@@ -123,7 +123,7 @@ describe('usage chart axes', () => {
     }]]) }
     const buckets = aggregateUsage([
       record('2026-11-18T12:00:00Z', { reportedCostUsd: 85, totals: { ...EMPTY_TOTALS, outputTokens: 620_000_000 } })
-    ], query, priced, {}, {})
+    ], query, priced, {})
     const cost = renderToStaticMarkup(createElement(UsageProviderChart, { buckets, query, metric: 'cost' }))
     expect(cost).toContain('US$100.00')
     expect(cost).toContain('US$50.00')

@@ -6,12 +6,16 @@ import type { UsageWorkerRequest, UsageWorkerResponse } from './workerProtocol'
 const port = parentPort
 if (!port) throw new Error('Usage scanner requires a worker')
 const service = createUsageService(workerData as UsageServiceOptions)
-port.on('message', async ({ id, query, refresh }: UsageWorkerRequest) => {
+port.on('message', async (request: UsageWorkerRequest) => {
   let result: UsageWorkerResponse
   try {
-    result = { id, summary: await service.getSummary(query, refresh) }
+    if (request.type === 'presets') {
+      result = { id: request.id, presets: await service.getPricePresets() }
+    } else {
+      result = { id: request.id, summary: await service.getSummary(request.query, request.refresh) }
+    }
   } catch {
-    result = { id, error: 'Unable to read usage summary' }
+    result = { id: request.id, error: request.type === 'presets' ? 'Unable to load price presets' : 'Unable to read usage summary' }
   }
   port.postMessage(result)
 })

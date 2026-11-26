@@ -1,7 +1,6 @@
 import type { AccountOrigin, LimitAccountIssue } from '../shared/limitsTypes'
 import type { UsageProviderKind } from '../shared/types'
 import type { PooledLimitAccount } from '../shared/usageLimits'
-import { providerInfo } from './usagePresentation'
 
 export const accountOriginLabels: Record<AccountOrigin, string> = {
   native: '原生',
@@ -15,15 +14,42 @@ export function visibleLimitIssues(
   return issues?.filter((issue) => !hiddenProviders.has(issue.provider)) ?? []
 }
 
-export function limitIssueText(issue: LimitAccountIssue) {
-  const account = `「${issue.displayName}」`
-  switch (issue.reason) {
-    case 'expired':
-      return `${account}登录凭证已过期，请在 ${providerInfo[issue.provider].label} 中重新登录后重试`
-    case 'cli_missing':
-      return `${account}登录凭证已过期，未找到可用的 agy CLI`
-    case 'failed':
-      return `${account}${issue.cached ? '刷新失败，当前显示缓存数据' : '无法读取额度'}`
+export const agyCliInstallUrl = 'https://antigravity.google/product/antigravity-cli'
+
+export interface LimitIssueReason {
+  title: string
+  body: string
+}
+
+export const agyCliInstallReason: LimitIssueReason = {
+  title: '为什么一定要安装 Antigravity CLI？',
+  body: 'Antigravity 桌面端的登录令牌每 1 小时过期，且刷新密钥仅内置于官方程序中；安装官方 agy CLI 后，看板才能在后台安全调用官方通道自动续期。'
+}
+
+export interface LimitIssueGuidance {
+  message: string
+  installUrl?: string
+  installReason?: LimitIssueReason
+  accountManagement: boolean
+}
+
+export function limitIssueGuidance(issue: LimitAccountIssue, current: boolean): LimitIssueGuidance {
+  if (issue.reason === 'cli_missing') {
+    return {
+      message: '未装 agy CLI，无法更新该账号的登录凭证，请安装 agy CLI：',
+      installUrl: agyCliInstallUrl,
+      installReason: agyCliInstallReason,
+      accountManagement: false
+    }
+  }
+  if (issue.reason === 'expired') {
+    return issue.origin === 'manual' && !current
+      ? { message: '登录已失效，请在「账号管理」重新登录。', accountManagement: true }
+      : { message: '登录已过期，请在客户端重新登录后重试。', accountManagement: false }
+  }
+  return {
+    message: issue.cached ? '刷新失败，当前显示缓存额度。' : '无法读取额度，请稍后重试。',
+    accountManagement: false
   }
 }
 

@@ -19,7 +19,7 @@ const record = (model: string, overrides: Partial<UsageRecord> = {}): UsageRecor
 });
 
 describe("aggregateUsage", () => {
-  it("isolates same-name OpenCode models unless explicitly aliased, with exact aliases winning", () => {
+  it("isolates same-name OpenCode models strictly by provider prefix", () => {
     const openCode = { provider: "opencode" as const, reportedCostUsd: 1 };
     const records = [
       record("CPA/qwen3.8-flash", openCode),
@@ -29,28 +29,28 @@ describe("aggregateUsage", () => {
       "qwen3.8-flash": { input_cost_per_token: 1, output_cost_per_token: 1 },
       "dashscope/qwen3.8-flash": { input_cost_per_token: 1e-6, output_cost_per_token: 1e-6 },
     }) };
-    expect(aggregateUsage(records, daily, rates, {}, {})).toMatchObject([
+    expect(aggregateUsage(records, daily, rates, {})).toMatchObject([
       { model: "alibaba-cn/qwen3.8-flash", costUsd: 1, costSource: "providerReported" },
       { model: "cpa/qwen3.8-flash", costUsd: 0, costSource: "unpriced" },
     ]);
-    const aliases = { "CPA/qwen3.8-flash": "Alibaba-CN/qwen3.8-flash" };
-    expect(aggregateUsage(records, daily, rates, {}, aliases)).toMatchObject([
-      { model: "alibaba-cn/qwen3.8-flash", costUsd: 2, records: 2 },
+    expect(aggregateUsage(records, daily, rates, {
+      "cpa/qwen3.8-flash": { inputCostPerMillionTokens: 2, outputCostPerMillionTokens: 4 },
+    })).toMatchObject([
+      { model: "alibaba-cn/qwen3.8-flash", costUsd: 1, costSource: "providerReported" },
+      { model: "cpa/qwen3.8-flash", costSource: "modelPriced", records: 1 },
     ]);
-    expect(aggregateUsage(records, daily, rates, {}, { ...aliases, "cpa/qwen3.8-flash": "other/model" }))
-      .toMatchObject([{ model: "alibaba-cn/qwen3.8-flash" }, { model: "other/model", costSource: "unpriced" }]);
   });
 
-  it("normalizes effort before transitive aliases and counts distinct sessions", () => {
+  it("normalizes effort variants, keeps rateModel hints, and counts distinct sessions", () => {
     const rows = aggregateUsage([
-      record("gemini-3.6-flash-high", { rateModel: "original-rate" }),
-      record("gemini-3.6-flash-medium"),
-      record("gemini-3.6-flash-low", { sessionId: "b" }),
-      record("gemini-3.6-flash-low", { timestampMs: Date.parse("2026-11-01T03:59:59Z") }),
-    ], daily, pricing, {}, { "gemini-3.6-flash": "intermediate", intermediate: "target" });
+      record("gemini-3.6-flash-high", { rateModel: "target" }),
+      record("gemini-3.6-flash-medium", { rateModel: "target" }),
+      record("gemini-3.6-flash-low", { sessionId: "b", rateModel: "target" }),
+      record("gemini-3.6-flash-low", { timestampMs: Date.parse("2026-11-01T03:59:59Z"), rateModel: "target" }),
+    ], daily, pricing, {});
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
-      day: "2026-11-01", model: "target", sessions: 2, records: 3, costSource: "modelPriced",
+      day: "2026-11-01", model: "gemini-3.6-flash", sessions: 2, records: 3, costSource: "modelPriced",
       totals: { uncachedInputTokens: 30, cachedInputTokens: 30, outputTokens: 15, reasoningTokens: 9 },
     });
     expect(rows[0].costUsd).toBeCloseTo(0.00024, 12);
@@ -65,17 +65,17 @@ describe("aggregateUsage", () => {
       record("target", { timestampMs: Date.parse(`2026-11-01T${hhmm}:00Z`) }));
     const includes = createUsageWindowFilter(query);
     expect(records.map(({ timestampMs }) => includes(timestampMs))).toEqual([true, true, false]);
-    expect(aggregateUsage(records, query, pricing, {}, {}).map((row) => row.hourStart)).toEqual([
+    expect(aggregateUsage(records, query, pricing, {}).map((row) => row.hourStart)).toEqual([
       "2026-11-01T05:00:00.000Z", "2026-11-01T06:00:00.000Z",
     ]);
   });
 
-  it("merges partial copies by provider and ignores alias cycles", () => {
+  it("merges partial copies by provider", () => {
     const rows = aggregateUsage([
       record("unknown", { dedupeKey: "id" }),
       record("unknown", { dedupeKey: "id", sessionId: "copy", totals: { ...EMPTY_TOTALS, outputTokens: 12 } }),
       record("unknown", { provider: "claude", dedupeKey: "id" }),
-    ], daily, pricing, {}, { unknown: "cycle", cycle: "unknown" });
+    ], daily, pricing, {});
     expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({
       model: "unknown", records: 1, sessions: 1, unpricedTokens: 32, unpricedRecords: 1, costSource: "unpriced",

@@ -46,7 +46,9 @@ async function fixture(overrides: Partial<Parameters<typeof createAccountLoginMa
 describe('login external URLs', () => {
   it('rejects spoofed hosts, credentials, and whitespace', () => {
     expect(validateExternalUrl('https://github.com/a').hostname).toBe('github.com')
-    for (const url of ['http://github.com', 'https://github.com.evil.test', 'https://u:p@github.com', 'https://@github.com',
+    expect(validateExternalUrl('https://antigravity.google/product/antigravity-cli').hostname).toBe('antigravity.google')
+    for (const url of ['http://github.com', 'https://github.com.evil.test', 'https://antigravity.google.evil.test',
+      'https://u:p@github.com', 'https://@github.com',
       'https://github.com/\nx', 'https://github.com /x', 'https://github.com\\x']) {
       expect(() => validateExternalUrl(url)).toThrow('不允许打开此链接。')
     }
@@ -169,6 +171,9 @@ describe('mock account login', () => {
   it('handles missing executables and sanitizes upstream failures', async () => {
     const missing = await fixture({ resolveCli: async () => undefined })
     expect((await missing.manager.start({ provider: 'codex' })).message).toContain('未检测到 Codex CLI')
+    const noAgy = await fixture({ resolveAgyCli: async () => undefined })
+    expect((await noAgy.manager.start({ provider: 'antigravity' })).message)
+      .toBe('未检测到 Antigravity CLI（agy），请先安装 Antigravity CLI 后再登录。')
     const f = await fixture()
     await f.manager.start({ provider: 'claude' })
     f.child.emit('error', new Error('private-token user@example.test'))

@@ -1,8 +1,10 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { EMPTY_TOTALS, type UsageBucket, type UsageSummary } from '../src/shared/types'
+import { EMPTY_TOTALS, type PricePreset, type UsageBucket, type UsageSummary } from '../src/shared/types'
 import { timeBreakdown } from '../src/renderer/components/BreakdownTable'
+import { applyPresetToRow, filterPricePresets, priceFields, type PriceRow } from '../src/renderer/components/PriceOverridesDialog'
+import { Segmented, views } from '../src/renderer/components/TopBar'
 import { UsageShareBar } from '../src/renderer/components/UsageShareBar'
 import { trendTitle, usageDayFormat, usageFigures, usageSegments, visibleUsageSummary } from '../src/renderer/usagePresentation'
 
@@ -38,18 +40,18 @@ describe('usage overview presentation', () => {
   it('shows cache writes with exactly four segments and no zero-value legend entries', () => {
     const segments = usageSegments(usageFigures([bucket()]), 'cost')
     expect(segments).toHaveLength(4)
-    expect(segments.find(({ label }) => label === '缓存写入')?.value).toBe(0.3)
+    expect(segments.find(({ label }) => label === '缓存创建')?.value).toBe(0.3)
     expect(segments.some(({ label }) => label === '未拆分')).toBe(false)
     const html = renderToStaticMarkup(createElement(UsageShareBar, { label: '按类型统计的费用', segments, metric: 'cost' }))
     expect(html).toContain('US$0.30')
-    expect(html).toContain('缓存写入')
+    expect(html).toContain('缓存创建')
     expect(html).not.toContain('输出')
     expect(html).not.toContain('未拆分')
     expect(html).not.toContain('data-pattern')
     expect(html).not.toContain('US$0.00')
   })
 
-  it('keeps cost and token categories in the same four-segment order', () => {
+  it('keeps cost and token categories in cacheRead -> cacheWrite -> input -> output order', () => {
     const values = usageFigures([bucket({
       costUsd: 1,
       categoryCostUsd: { input: 0.1, cacheRead: 0.2, cacheWrite: 0.3, output: 0.15 },
@@ -58,27 +60,27 @@ describe('usage overview presentation', () => {
     const cost = usageSegments(values, 'cost')
     const tokens = usageSegments(values, 'tokens')
     expect(cost.map(({ label, value }) => `${label}: ${value}`).join('\n')).toMatchInlineSnapshot(`
-      "输入: 0.1
-      缓存输入: 0.2
-      缓存写入: 0.3
+      "缓存读取: 0.2
+      缓存创建: 0.3
+      输入: 0.1
       输出: 0.15"
     `)
     expect(tokens.map(({ label, value }) => `${label}: ${value}`).join('\n')).toMatchInlineSnapshot(`
-      "输入: 30
-      缓存输入: 20
-      缓存写入: 10
+      "缓存读取: 20
+      缓存创建: 10
+      输入: 30
       输出: 40"
     `)
     expect(tokens.map(({ color }) => color)).toEqual(cost.map(({ color }) => color))
     expect(tokens.map(({ color }) => color)).toEqual([
-      'color-mix(in srgb, var(--color-ink) 70%, var(--color-canvas))',
       'color-mix(in srgb, var(--color-ink) 25%, var(--color-canvas))',
       'color-mix(in srgb, var(--color-ink) 45%, var(--color-canvas))',
+      'color-mix(in srgb, var(--color-ink) 70%, var(--color-canvas))',
       '#f4f4f5'
     ])
     const costHtml = renderToStaticMarkup(createElement(UsageShareBar, { label: '按类型统计的费用', segments: cost, metric: 'cost' }))
     expect(costHtml).not.toMatch(/data-pattern|未拆分|hatch/)
-    expect(costHtml).toContain('title="缓存输入 · US$0.20 · 26.7%"')
+    expect(costHtml).toContain('title="缓存读取 · US$0.20 · 26.7%"')
     const tokensHtml = renderToStaticMarkup(createElement(UsageShareBar, { label: '按类型统计的 token', segments: tokens, metric: 'tokens' }))
     expect(tokensHtml).not.toMatch(/data-pattern|未拆分|输入框/)
   })
@@ -99,5 +101,60 @@ describe('usage overview presentation', () => {
     expect(usageDayFormat.format(new Date('2026-11-24'))).toBe('11月24日')
     expect(trendTitle({ timeZone: 'UTC', sinceDay: '2026-11-24', untilDay: '2026-11-24', resolution: 'hour' }, 'tokens'))
       .toBe('每小时处理的 token')
+  })
+
+  it('uses 账号 (A) for the accounts/limits view tab', () => {
+    const html = renderToStaticMarkup(createElement(Segmented, {
+      label: '用量视图', value: 'limits', options: views, onChange: () => {}
+    }))
+    expect(html).toContain('title="账号 (A)"')
+    expect(html).toContain('>账号<')
+    expect(html).not.toContain('限制 (L)')
+  })
+
+  it('uses 缓存读取 / 缓存创建 headers and applies presets without overwriting model IDs', () => {
+    expect(priceFields.map(([, label]) => label)).toEqual(['输入', '输出', '缓存读取', '缓存创建'])
+    const presets: PricePreset[] = [
+      {
+        id: 'models.dev:openai/gpt-5', modelId: 'openai/gpt-5', label: 'GPT-5',
+        providerLabel: 'OpenAI', source: 'models.dev',
+        inputCostPerMillionTokens: 1.25, outputCostPerMillionTokens: 10, cacheReadCostPerMillionTokens: 0.125
+      },
+      {
+        id: 'models.dev:anthropic/claude-opus-4-6', modelId: 'anthropic/claude-opus-4-6', label: 'Claude Opus 4.6',
+        providerLabel: 'Anthropic', source: 'models.dev',
+        inputCostPerMillionTokens: 5, outputCostPerMillionTokens: 25,
+        cacheReadCostPerMillionTokens: 0.5, cacheWriteCostPerMillionTokens: 6.25
+      }
+    ]
+    expect(filterPricePresets(presets, 'cpa/claude-opus-4-6').map(p => p.modelId)).toEqual([
+      'anthropic/claude-opus-4-6'
+    ])
+    expect(filterPricePresets(presets, 'anthropic opus').map(p => p.modelId)).toEqual(['anthropic/claude-opus-4-6'])
+
+    const existingRow: PriceRow = { id: 0, model: 'cpa/claude-opus-4-6', rates: {} }
+    expect(applyPresetToRow(existingRow, presets[1])).toEqual({
+      id: 0,
+      model: 'cpa/claude-opus-4-6',
+      rates: {
+        inputCostPerMillionTokens: '5',
+        outputCostPerMillionTokens: '25',
+        cacheReadCostPerMillionTokens: '0.5',
+        cacheWriteCostPerMillionTokens: '6.25'
+      }
+    })
+
+    const blankNewRow: PriceRow = { id: 1, model: '', rates: {}, isNew: true }
+    expect(applyPresetToRow(blankNewRow, presets[0])).toEqual({
+      id: 1,
+      model: '',
+      isNew: true,
+      rates: {
+        inputCostPerMillionTokens: '1.25',
+        outputCostPerMillionTokens: '10',
+        cacheReadCostPerMillionTokens: '0.125',
+        cacheWriteCostPerMillionTokens: ''
+      }
+    })
   })
 })

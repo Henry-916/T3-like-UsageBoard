@@ -1,10 +1,11 @@
-import { Check, ChevronDown, LoaderCircle, Plus, Trash2 } from 'lucide-react'
+import { ArrowUpRight, Check, ChevronDown, LoaderCircle, Plus, Trash2 } from 'lucide-react'
 import {
   useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent
 } from 'react'
 import type { AccountLoginState, AccountView } from '../../shared/limitsTypes'
 import type { UsageProviderKind } from '../../shared/types'
-import { createAccountLoginSession, loginFailureMessage, loginInProgress } from '../accountLoginSession'
+import { createAccountLoginSession, loginFailureMessage, loginInProgress, missingCliMessages } from '../accountLoginSession'
+import { agyCliInstallUrl } from '../limitsPresentation'
 import { useAccountsData } from '../hooks/useAccountsData'
 import { useAuthorizationCopy } from '../hooks/useAuthorizationCopy'
 import type { UpdateControls } from '../hooks/useUpdates'
@@ -540,6 +541,13 @@ function AddAccountForm({ busy, onCancel, login, snapshot, addKey }: {
           placeholder="粘贴授权页面显示的授权码或完整回调链接" maxLength={8192} required disabled={cancelling || submitting} />
       </label>}
       {formError && <p className="accounts-error" role="alert">{formError}</p>}
+      {formError === missingCliMessages.antigravity && (
+        <button type="button" className="cli-install-link"
+          onClick={() => void window.usageApi.openExternalUrl(agyCliInstallUrl).catch(() => undefined)}>
+          <span>{agyCliInstallUrl}</span>
+          <ArrowUpRight size={13} aria-hidden="true" />
+        </button>
+      )}
       <div className="flex flex-wrap justify-end gap-2">
         <button ref={cancelButton} className="action-button" type="button" disabled={busy || cancelling} onClick={onCancel}>取消</button>
         {!waitingBrowser && <button className="action-button primary-action" type="submit"

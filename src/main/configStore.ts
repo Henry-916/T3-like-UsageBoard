@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { z } from 'zod'
-import { accountConfigSchema, modelAliasesSchema, priceOverridesSchema, uiPreferencesSchema } from '../shared/types'
+import { accountConfigSchema, priceOverridesSchema, uiPreferencesSchema } from '../shared/types'
 import { readJson, writeJsonAtomic } from './jsonFile'
 
 const configSchema = z.object({
@@ -11,7 +11,6 @@ const configSchema = z.object({
     displayName: z.string().trim().min(1).optional()
   })).default({}),
   priceOverrides: priceOverridesSchema.default({}),
-  modelAliases: modelAliasesSchema.default({}),
   preferences: uiPreferencesSchema.extend({
     launchAtLogin: z.boolean().optional()
   }).default({})

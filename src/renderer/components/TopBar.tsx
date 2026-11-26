@@ -6,10 +6,10 @@ import { showUpdateCapsule, updateActionLabel } from '../updatePresentation'
 import { providerInfo, providers, ranges, type UsageRange, type UsageView } from '../usagePresentation'
 import { ProviderMark } from './ProviderMark'
 
-const views = [
+export const views = [
   { value: 'cost', label: '费用', shortcut: 'C' },
   { value: 'tokens', label: 'token', shortcut: 'T' },
-  { value: 'limits', label: '限制', shortcut: 'L' }
+  { value: 'limits', label: '账号', shortcut: 'A' }
 ] as const
 
 export function Segmented<T extends string>({ label, value, options, onChange }: {

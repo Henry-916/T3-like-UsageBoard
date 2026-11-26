@@ -1,5 +1,5 @@
 const allowedHosts = new Set([
-  'accounts.google.com', 'auth.openai.com', 'chatgpt.com',
+  'accounts.google.com', 'antigravity.google', 'auth.openai.com', 'chatgpt.com',
   'claude.ai', 'claude.com', 'platform.claude.com', 'console.anthropic.com', 'github.com'
 ])
 

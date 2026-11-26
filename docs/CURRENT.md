@@ -9,8 +9,11 @@
 - **项目定位**：从 MIT 协议开源项目 T3 Code（`https://github.com/pingdotgg/t3code`）拆出的独立 Windows 桌面 AI 用量与实时额度看板，仅覆盖 `antigravity`、`opencode`、`codex`、`claude` 四家本地数据源，界面采用简体中文、最小化到系统托盘。
 - **版本真值**：唯一版本真值写在 [package.json](../package.json) 的 `version`，经 [version.ts](../src/shared/version.ts) 供托盘与构建复用。
 - **协同流程**：
-  - **Antigravity**：负责对照参考图 / T3 源码出方案（写入 `docs/specs/NNN-vX.Y.Z-<slug>.md`）、把控架构一致性、运行独立验收与 Git 提交/打标签。
-  - **GPT**：按已定稿工单执行代码改动、补齐单元测试、构建 `dist/` Windows 双包并做冷启动验证。
+  1. **方案阶段（Antigravity）**：Henry 提需求，Antigravity 对照参考图与源码编写/累加方案（`docs/specs/NNN-vX.Y.Z-<slug>.md`），期间不直接修改业务代码；
+  2. **执行阶段（GPT）**：Henry 确认开始执行方案后，交由 GPT 按定稿方案完成代码实现与单元测试；
+  3. **独立验收与返工（Antigravity ↔ GPT）**：Antigravity 独立审阅代码并跑校验，发现问题则整理返工项交由 GPT 修正，直至验收通过；
+  4. **本地提交与打包实测（Antigravity → Henry）**：验收通过后先完成本地 `git commit`（暂不推送/打标），汇总提醒本次改动内容并构建 `dist/` Windows 双包供 Henry 实机验收；
+  5. **发布收口（Antigravity）**：Henry 实机验收确认 OK 后，执行 `git push` 推送代码、打 `vX.Y.Z` 标签并发布 GitHub Release。
 
 ---
 
@@ -18,8 +21,8 @@
 
 ### 2.1 视觉与桌面窗口
 - **色彩与字体**：OLED 纯黑主画布 `#000000`（`BrowserWindow.backgroundColor` 与 CSS `--color-canvas`）、卡片 `#111111`、`16px` 根字号、主体容器 `max-width: 1024px`。随包内置 Adobe 思源宋体简体中文可变字体 [`SourceHanSerifSC-VF.otf.woff2`](../src/renderer/assets/fonts/SourceHanSerifSC-VF.otf.woff2)（OFL-1.1 完整许可见 [THIRD_PARTY_LICENSES.md](../THIRD_PARTY_LICENSES.md)），[globals.css](../src/renderer/styles/globals.css) 以无 `local()`、`font-display: block` 的独立族名 `"T3UsageBoard Serif SC"` 置于 `--font-sans` 首项并配合 [electron.vite.config.ts](../electron.vite.config.ts) CSP `font-src 'self'`，消除未安装字体电脑回退 `SimSun` 的观感差异（不设字体切换开关）。
-- **分类条与图标**：[usagePresentation.ts](../src/renderer/usagePresentation.ts) 与 [UsageShareBar.tsx](../src/renderer/components/UsageShareBar.tsx) 的「按类型统计的费用 / token」条带在 `cost` 与 `tokens` 两种视图下均固定按 `输入 → 缓存输入 → 缓存写入 → 输出` 4 段排列（四档灰度 + `2px` 黑缝，已移除 `未拆分` 斜纹分段；[PriceOverridesDialog.tsx](../src/renderer/components/PriceOverridesDialog.tsx) 同步改为 `缓存输入`）；应用图标母版为 [logo.svg](../resources/logo.svg) 并导出 `16/20/24/32/48/256` 多尺寸 `tray-icon.ico`。
-- **顶栏与窗口控制**：左侧面包屑 `用量` 置灰 + 高亮提供方多选触发器（原生 `popover="auto"` 多选菜单 + `uiPreferences.hiddenProviders` 持久化）；右侧时间窗（`过去 24 小时` / `7 天` / `30 天` / `90 天`）、视图切换（`费用` / `token` / `限制`）均为无外框分段开关（`#0b0b0b` 槽 + `#1e1e1e` 选中态），右侧控制区含刷新、设置及「最小化 / 最大化（向下还原）/ 关闭到托盘」三键与主进程事件双向同步。
+- **分类条与图标**：[usagePresentation.ts](../src/renderer/usagePresentation.ts) 与 [UsageShareBar.tsx](../src/renderer/components/UsageShareBar.tsx) 的「按类型统计的费用 / token」条带在 `cost` 与 `tokens` 两种视图下均固定按 `缓存读取 → 缓存创建 → 输入 → 输出` 4 段排列（保留语义原色：25% 深灰 → 45% 中灰 → 70% 浅灰 → `#f4f4f5` 近白 + `2px` 黑缝，已移除 `未拆分` 斜纹分段；[PriceOverridesDialog.tsx](../src/renderer/components/PriceOverridesDialog.tsx) 同步改为 `缓存读取` / `缓存创建`）；应用图标母版为 [logo.svg](../resources/logo.svg) 并导出 `16/20/24/32/48/256` 多尺寸 `tray-icon.ico`。
+- **顶栏与窗口控制**：左侧面包屑 `用量` 置灰 + 高亮提供方多选触发器（原生 `popover="auto"` 多选菜单 + `uiPreferences.hiddenProviders` 持久化）；右侧时间窗（`过去 24 小时` / `7 天` / `30 天` / `90 天`）、视图切换（`费用 (C)` / `token (T)` / `账号 (A)`，底层保留 `'limits'` 枚举兼容旧偏好）均为无外框分段开关（`#0b0b0b` 槽 + `#1e1e1e` 选中态），右侧控制区含刷新、设置及「最小化 / 最大化（向下还原）/ 关闭到托盘」三键与主进程事件双向同步。
 - **提供方图标**：[ProviderMark.tsx](../src/renderer/components/ProviderMark.tsx) 中 `Antigravity` 1:1 采用 T3 原版实心多色渐变图标（128×128 PNG data URI）。
 
 ### 2.2 账号发现、历史扫描、应用内登录、身份归并与快捷切号
@@ -38,20 +41,21 @@
   - `Codex`：调用 `codex -c cli_auth_credentials_store="file" app-server` 在隔离 `profiles/<id>/`（`CODEX_HOME`）完成 ChatGPT OAuth；
   - `Claude Code`：保留宿主浏览器及用户临时目录环境变量、注入 `BROWSER: '__USAGE_DASHBOARD_NO_BROWSER__'` 抑制 CLI 自动打开浏览器并放行 `claude.ai` / `claude.com` / `platform.claude.com` / `console.anthropic.com`，通过 `CLAUDE_CONFIG_DIR` 隔离完成 `claude auth login --claudeai`；
   - `OpenCode`：应用内输入 Go API Key 并经 `safeStorage` 加密存储。
-- **模型归一化与计价**：OpenCode 与使用非默认 `model_provider`（非 `openai`）的 Codex 会话按小写渠道前缀 `<provider>/<model>`（经 [modelNormalize.ts](../src/shared/modelNormalize.ts) `qualifyModelId` 防重前缀）拆分聚合桶、明细展示与自定义价格；`normalizeModelId` 仅对 `/` 右侧剥离思考强度后缀（[scanCache.ts](../src/main/usage/scanCache.ts) 缓存版本 `v3`）。[opencodePricing.ts](../src/main/usage/opencodePricing.ts) 通过脱敏投影解析器只读热加载本机 `opencode.json` / `opencode.jsonc`（对象式与数组阶梯式 `cost`）及 OpenCode `models.json` 缓存（按 `(mtimeMs, size)` 指纹自动失效）；[pricing.ts](../src/main/usage/pricing.ts) 严格按渠道隔离计价，优先级为 `UsageBoard priceOverrides > OpenCode 用户配置单价 > OpenCode models.json 缓存 > LiteLLM (24h 缓存 + 离线兜底)`（前两项用户显式单价覆盖日志旧 `reportedCostUsd`；含 `<provider>/` 模型仅白名单官方按量网关映射 LiteLLM，绝不对未知/中转渠道剥离前缀套用裸模型单价）；[aggregation.ts](../src/main/usage/aggregation.ts) `modelAliases` 支持小写回退；**凡查不到单价的模型（除明确上报 `$0` 的免费模型外）一律忽略无法拆分的笼统上报金额并标记为 `unpriced`（`未定价`）**；美元统一输出 `US$`。
+- **模型归一化与计价**：OpenCode 与使用非默认 `model_provider`（非 `openai`）的 Codex 会话按小写渠道前缀 `<provider>/<model>`（经 [modelNormalize.ts](../src/shared/modelNormalize.ts) `qualifyModelId` 防重前缀）拆分聚合桶、明细展示与自定义价格；`normalizeModelId` 仅对 `/` 右侧剥离思考强度后缀（[scanCache.ts](../src/main/usage/scanCache.ts) 缓存版本 `v3`）。[opencodePricing.ts](../src/main/usage/opencodePricing.ts) 通过脱敏投影解析器只读热加载本机 `opencode.json` / `opencode.jsonc`（对象式与数组阶梯式 `cost`）及 OpenCode `models.json` / `opencode.db`（`kv` 表 `models-dev:v3:catalog`，只读投影 `cost.text` 白名单字段）目录缓存（按 `(mtimeMs, size)` 与 `-wal` 附属文件指纹自动失效）；[pricing.ts](../src/main/usage/pricing.ts) 严格按渠道隔离计价，优先级为 `UsageBoard priceOverrides > OpenCode 用户配置单价 > OpenCode 目录缓存（v3 db > models.json） > LiteLLM (24h 缓存 + 离线兜底)`（前两项用户显式单价覆盖日志旧 `reportedCostUsd`；含 `<provider>/` 模型仅白名单官方按量网关映射 LiteLLM，绝不对未知/中转渠道剥离前缀套用裸模型单价）；[aggregation.ts](../src/main/usage/aggregation.ts) 已移除 `modelAliases`（「映射到」），保持模型渠道隔离；**凡查不到单价的模型（除明确上报 `$0` 的免费模型外）一律忽略无法拆分的笼统上报金额并标记为 `unpriced`（`未定价`）**；美元统一输出 `US$`。
+- **价格预设**：[pricePresets.ts](../src/main/usage/pricePresets.ts) 仅从 `https://models.dev/api.json` 获取原厂价格，并独立缓存 24 小时（`models-dev-cache.json`，`version: 4`，含全库 `adoption` 接入计数；过期或断网时回退旧缓存），不读取本机 OpenCode `models.json` / `opencode.jsonc`，也不使用 LiteLLM 兜底；按固定热门顺位收录 Tier A 16 家原厂直营站与 Tier B 16 家主流国内云站/头部网关（过滤其余杂牌中转及各类 `*-coding-plan` / `*-token-plan` / `*-step-plan`），以 `canonical_model_id` 判定原厂归属并保证每个底层模型仅有唯一 `primary: true` 原厂代表项（国际站优先于 `-cn` 站，跨厂转售仅作非原厂渠道保留）；同 Provider 内区域前缀与 `/routers/` 副本折叠为 `aliases`，同站点不同价子型号独立保留并标记 `derived: true`；热门度按 `release_date` 新鲜度 × 全库 `adoption` 接入广度取 `log2(adoption + 2)` 做对数压缩后按厂内相对计分（由母款拆出的子变体不继承 `adoption` 且权重 `0.25`，`flash` / `lite` / `mini` / `nano` / `haiku` 轻量档权重 `0.85`），剔除纯生图/纯音频/纯视频与向量/重排模型，图文音多模态输出降权 `0.05`。预设直接以 `provider/model` 作为展示名（不采信上游社区 `name`）。[PriceOverridesDialog.tsx](../src/renderer/components/PriceOverridesDialog.tsx) 的「选择预设」为两态交互：搜索框为空时对 `providerRank < 10` 的头部原厂各取前两款非衍生正代主力做两轮轮询首屏，再按厂商顺位分块追加其余 `primary` 代表；已填模型 ID 的行打开时自动将完整 `row.model.trim()` 预填进搜索框并单次 `select()` 全选（后续输入不再重复聚焦/全选），非空搜索词走统一搜索（忽略 `- _ . /` 与空格分隔符做容错匹配，按精确 / 前缀 / 原始子串 / 模糊四级相关性排序，普通词优先原厂代表；单段 `<provider>/<model>` 查询会拆出右侧模型名并剥离思考挡位、快照日期与 `-free` 后缀的基础名召回，仅保留对应模型且按「同渠道精确 → 同渠道基础款 → 同渠道前缀 → 跨渠道精确 → 跨渠道基础款 → 其余模糊命中」排序，不再拼接无关兜底模型）；下拉项仅在模型 ID 实际横向截断时，于列表外以 `position: fixed` 视口夹紧的自绘气泡展示完整名称（不使用原生 `title`，默认上方、空间不足翻至下方，超长 ID 允许超出 560px 菜单宽并自动折行），鼠标移出、列表滚动、搜索词变化、关闭菜单或窗口 `resize` / `blur` 时立即清除。选择预设始终保留原 `模型 ID` 不变，仅回填 4 项单价；预设菜单固定 `560px` 宽，选项行高 `30px`、间距 `2px`，按最多 `9` 整行（`342px`）量化高度，视口不足时以 `rowsFit` 取整行数精确收缩，消除底部半行裁切。
 
-### 2.3 限制页、托盘额度小面板与特殊交互
-- **主面板「限制」页顶部对齐账号胶囊栏与额度条**：
-  - 每个提供方标题右侧按两列主栅格同行渲染有序账号胶囊栏（`current` 居最左第 1 列；下方各窗口额度列严格按同一完整账号列序对齐，缺失项渲染空占位槽），下方 `32px` 额度条内不再重复显示邮箱，仅展示剩余百分比与徽章；非当前可切换的 Codex / Antigravity 胶囊常态无常驻按钮、悬停/聚焦浮现 `切换` 轻提示，点击弹出默认聚焦「取消」的二次确认切号弹窗。
+### 2.3 账号页、托盘额度小面板与特殊交互
+- **主面板「账号」页（原「限制」页）顶部对齐账号胶囊栏与额度条**：
+  - 每个提供方标题右侧按两列主栅格同行渲染有序账号胶囊栏（`current` 居最左第 1 列，胶囊 `line-height: 1.4` 完整容纳邮箱下延笔画；下方各窗口额度列严格按同一完整账号列序对齐，缺失项渲染空占位槽），下方 `32px` 额度条内不再重复显示邮箱，仅展示剩余百分比与徽章；非当前可切换的 Codex / Antigravity 胶囊常态无常驻按钮、悬停/聚焦浮现 `切换` 轻提示，点击弹出默认聚焦「取消」的二次确认切号弹窗；存在凭证过期 / 缺少 `agy` CLI / 刷新失败 `issue` 的账号胶囊禁用切号并常驻琥珀色警告图标（刷新中切换为琥珀色旋转 `LoaderCircle`），其列下额度条采用暗琥珀 45° 斜纹警示态与细琥珀内描边（刷新中叠加横向流光动画），悬停/聚焦/点击弹出精简诊断浮层（`cli_missing` 附官方安装页链接 `https://antigravity.google/product/antigravity-cli`，`manual` 过期账号附「账号管理」入口，并提供保焦「重试」按钮）。
 - **Antigravity 额度顺序、窗口命名与自动续期**：
   - Codex 会话窗口标签统一为 `5-Hour`（搭配 `Weekly` / `Monthly`）；[usageLimits.ts](../src/shared/usageLimits.ts) 对 Antigravity 窗口按模型家族优先分组再按时长排序：`Gemini · 5-hour` → `Gemini · Weekly` → `Claude & GPT (shared) · 5-hour` → `Claude & GPT (shared) · Weekly`（其他提供方相对顺序不变）。
   - Antigravity 过期 token 通过隔离临时目录调用 `agy` CLI 串行静默续期，新 token 加密缓存在应用私有 `userData`，绝不修改本机外部或 `~/.t3` 目录文件。
-  - `limits-cache.json` 持久化最近一次有效读数，冷启动立即恢复旧值后再刷新；报错区按「凭证过期 / 缺少 `agy` CLI / 刷新失败」分类展示，采用琥珀色警告样式；限额详情浮层不再展示「来源」行。
+  - `limits-cache.json` 持久化最近一次有效读数，冷启动立即恢复旧值后再刷新；已移除页面底部全局黄色警告栏，改为异常账号始终保留在提供方邮箱胶囊栏（即使无缓存窗口读数），通过胶囊常驻警告图标与悬浮诊断浮层分级展示「凭证过期 / 缺少 `agy` CLI / 刷新失败」恢复引导；限额详情浮层不再展示「来源」行。
 - **Codex 重置券兑换**：
   - 单行 `32px` 额度条左侧显示同池多账号 `↻ +XX%` 回血预期，白色 `2px` 匀速刻度线使用 `--limit-tick-at` 同时驱动轨道镂空，悬停或键盘打开统一详情 `popover="auto"` 展示各账号余量与重置券。
   - 「使用重置」仅先收起浮层并打开独立的 `使用重置券？` 二次确认弹窗，**默认聚焦「取消」防回车误触**；服务端具备 HTTP 直连优先 + CLI 回退、跨账号别名串行互斥锁、粘性 `idempotencyKey` 防重放及兑换后退避重查。
 - **托盘额度小面板（[tray.ts](../src/main/tray.ts)、[trayPanel.ts](../src/main/trayPanel.ts)、[TrayPanel.tsx](../src/renderer/components/TrayPanel.tsx)）**：
-  - 左键单击托盘图标（`400ms` 去抖防双击闪跳）贴近任务栏四向边缘弹出 `360px` 宽（高度自适应、上限 `520px`）独立无边框面板（双击不额外切换主窗），采用四列固定槽位对齐（窗口短标签 + 进度条与匀速刻度 + 右对齐百分比 + 右对齐本地绝对重置时刻 `HH:mm` / `周XHH:mm` / `M/D HH:mm`，无重置时间保留空占位槽），`current` 账号组内第 1 位显示，支持额度行悬停/聚焦单行暗色微提示（倒计时、匀速预期、缓存标记）、Codex 重置券只读徽章（不在小面板直接兑换）及行内二次确认切号（默认聚焦 `取消`、支持 `Esc` 分级取消与切号期 `blur` 保护），底部提供「刷新」与「打开主面板」；右键菜单首项保留「显示主面板」。
+  - 左键单击托盘图标（`400ms` 去抖防双击闪跳）贴近任务栏四向边缘弹出 `360px` 宽（高度自适应、上限 `520px`）独立无边框面板（双击不额外切换主窗），采用四列固定槽位对齐（窗口短标签 + 进度条与匀速刻度 + 右对齐百分比 + 右对齐本地绝对重置时刻 `HH:mm` / `周XHH:mm` / `M/D HH:mm`，其中 `1 <= days <= 7`（含同星期几相差 7 天）统一走 `周XHH:mm`，无重置时间保留空占位槽），`current` 账号组内第 1 位显示，移除行内原生 `title` 与整行焦点捕获，改为面板顶层自绘暗色微提示按目标单元格独立命中（额度条撑满行高热区并支持满血无计时反馈、百分比精确 1 位小数、`周XHH:MM` 悬浮显示 `MM月DD日 周XHH:MM`、窗口简称/超长邮箱与重置券独立提示）、Codex 重置券只读徽章（不在小面板直接兑换）及行内二次确认切号（默认聚焦 `取消`、支持 `Esc` 分级取消与切号期 `blur` 保护），底部提供「刷新」与「打开主面板」；右键菜单首项保留「显示主面板」。
 
 ### 2.4 应用更新与分发（[updater.ts](../src/main/updater.ts)）
 - **发布源与触发策略**：通过公开 GitHub Releases（当前配置 `Henry-916/T3-like-UsageBoard`）检查新版本；打包后启动延迟 `10s` 首检并每 `4h` 静默复检（404 / 离线及无新版静默忽略，仅在有新版/下载中/就绪时在顶栏显示胶囊）；设置菜单、账号管理页脚与系统托盘菜单均提供手动检查（`manual: true`）、下载与安装入口——手动检查期间在固定顶栏（[TopBar.tsx](../src/renderer/components/TopBar.tsx)）展示 `LoaderCircle` 旋转胶囊（`正在检查…`）并在页脚按钮显示 `检查中…`，无新版/失败提示渲染于固定顶栏 `.titlebar-update-feedback` 胶囊（不随页面滚动、`4s` 自动收起且支持 `×` 手动关闭）。
@@ -82,5 +86,6 @@
 | 007 | `v0.5.0` | [007-v0.5.0-rebrand-tray-panel-account-switch.md](specs/007-v0.5.0-rebrand-tray-panel-account-switch.md) | 更名为 T3-like UsageBoard 与新 Logo、userData 迁移、分类条重设计、邮箱归并与快捷切号、托盘额度小面板 |
 | 008 | `v0.5.1` | [008-v0.5.1-bundled-serif-font.md](specs/008-v0.5.1-bundled-serif-font.md) | 内置思源宋体可变字体、清空 T3 运行时代码、未定价不估算与 4 段费用条、当前账号置顶、限制页胶囊切号与托盘小面板精修 |
 | 009 | `v0.5.2` | [009-v0.5.2-provider-qualified-models-and-opencode-pricing.md](specs/009-v0.5.2-provider-qualified-models-and-opencode-pricing.md) | 按上游 Provider 拆分模型统计（`<provider>/<model>`）、只读热加载 OpenCode 本地与目录定价、严格渠道隔离计价 |
+| 010 | `v0.5.3` | [010-v0.5.3-ui-refinements.md](specs/010-v0.5.3-ui-refinements.md) | 分类条重排改名（`缓存读取 → 缓存创建 → 输入 → 输出`）、托盘「指哪显哪」悬浮与 `MM月DD日 周XHH:MM`、`账号 (A)` 改名与胶囊行高修复、移除「映射到」并引入每模型唯一的原厂价格预设、OpenCode `opencode.db` v3 目录计价、预设菜单 `560px` 整行量化、托盘 7 天 `周X` 修正与异常胶囊诊断浮层 |
 
 > 后续每轮新需求在 `docs/specs/` 下按 `NNN-vX.Y.Z-<slug>.md` 递增新建；合入并完成版本发布后，如改变了全局默认行为，同步更新本页对应条目。

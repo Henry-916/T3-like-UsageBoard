@@ -106,9 +106,9 @@ export function usageSegments(values: UsageFigures, metric: UsageMetric): ShareS
   const { totals, categoryCostUsd: cost } = values
   const isCost = metric === 'cost'
   return [
+    { label: '缓存读取', value: isCost ? cost.cacheRead : totals.cachedInputTokens, color: shareColors.cacheRead },
+    { label: '缓存创建', value: isCost ? cost.cacheWrite : totals.cacheCreationTokens, color: shareColors.cacheWrite },
     { label: '输入', value: isCost ? cost.input : totals.uncachedInputTokens, color: shareColors.input },
-    { label: '缓存输入', value: isCost ? cost.cacheRead : totals.cachedInputTokens, color: shareColors.cacheRead },
-    { label: '缓存写入', value: isCost ? cost.cacheWrite : totals.cacheCreationTokens, color: shareColors.cacheWrite },
     { label: '输出', value: isCost ? cost.output : totals.outputTokens, color: shareColors.output }
   ]
 }

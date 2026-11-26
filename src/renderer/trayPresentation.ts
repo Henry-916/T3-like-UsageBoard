@@ -1,6 +1,7 @@
 import type { LimitAccountReading } from '../shared/limitsTypes'
 import type { UsageProviderKind } from '../shared/types'
 import { poolUsageLimits, type PooledLimitAccount, type PooledLimitWindow } from '../shared/usageLimits'
+import { formatLimitPercent } from './limitsPresentation'
 
 const providers = ['codex', 'claude', 'opencode', 'antigravity'] as const
 
@@ -62,8 +63,30 @@ export function trayResetTime(resetsAt: string | undefined, now: number): string
   const clock = `${pad(reset.getHours())}:${pad(reset.getMinutes())}`
   const days = Math.round((calendarDay(reset) - calendarDay(new Date(now))) / 86_400_000)
   if (days === 0) return clock
-  if (days > 0 && days < 7) return `周${weekdays[reset.getDay()]}${clock}`
+  if (days >= 1 && days <= 7) return `周${weekdays[reset.getDay()]}${clock}`
   return `${reset.getMonth() + 1}/${reset.getDate()} ${clock}`
+}
+
+export function trayResetTooltip(resetsAt: string | undefined, now: number): string | null {
+  if (!resetsAt) return null
+  const at = Date.parse(resetsAt)
+  if (!Number.isFinite(at) || at <= now) return null
+  const reset = new Date(at)
+  const days = Math.round((calendarDay(reset) - calendarDay(new Date(now))) / 86_400_000)
+  if (days < 1 || days > 7) return null
+  return `${pad(reset.getMonth() + 1)}月${pad(reset.getDate())}日 周${weekdays[reset.getDay()]}${pad(reset.getHours())}:${pad(reset.getMinutes())}`
+}
+
+export function trayCreditTooltip(credits: number): string | null {
+  return credits > 0 ? `${credits} 张重置券 · 可在主面板使用` : null
+}
+
+export function trayPercentTooltip(
+  reading: Pick<PooledLimitAccount, 'remainingPercent' | 'stale'>
+): string {
+  const parts = [`剩余 ${formatLimitPercent(reading.remainingPercent)}`]
+  if (reading.stale) parts.push('缓存')
+  return parts.join(' · ')
 }
 
 function remainingText(milliseconds: number): string {
@@ -77,16 +100,21 @@ function remainingText(milliseconds: number): string {
 }
 
 export function trayQuotaTooltip(
-  reading: Pick<PooledLimitAccount, 'resetsAt' | 'stale'>,
+  reading: Pick<PooledLimitAccount, 'remainingPercent' | 'resetsAt' | 'stale'>,
   now: number,
   expectedRemainingPercent?: number | null
-): string | null {
-  if (!reading.resetsAt) return null
-  const at = Date.parse(reading.resetsAt)
-  if (!Number.isFinite(at)) return null
-  const parts = [at <= now ? '即将重置' : `还需 ${remainingText(at - now)}`]
-  if (at > now && expectedRemainingPercent !== null && expectedRemainingPercent !== undefined) {
-    parts.push(`匀速应剩 ${Math.round(expectedRemainingPercent)}%`)
+): string {
+  const at = reading.resetsAt ? Date.parse(reading.resetsAt) : NaN
+  const parts: string[] = []
+  if (!Number.isFinite(at)) {
+    parts.push(`剩余 ${formatLimitPercent(reading.remainingPercent)}`, '尚未开始计时')
+  } else if (at <= now) {
+    parts.push('即将重置')
+  } else {
+    if (expectedRemainingPercent !== null && expectedRemainingPercent !== undefined) {
+      parts.push(`匀速应剩 ${Math.round(expectedRemainingPercent)}%`)
+    }
+    parts.push(`还需 ${remainingText(at - now)}`)
   }
   if (reading.stale) parts.push('缓存')
   return parts.join(' · ')

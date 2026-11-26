@@ -225,7 +225,7 @@ export async function resolveAgyCli({
       return target
     } catch { /* try the next candidate */ }
   }
-  const names = windows ? ['agy.exe', 'antigravity.exe'] : ['agy', 'antigravity']
+  const names = windows ? ['agy.exe'] : ['agy', 'antigravity']
   const dirs = (getEnv('PATH') ?? '').split(windows ? ';' : ':').map(dir => dir.replace(/^"|"$/g, ''))
   for (const dir of dirs) {
     if (!isAbsolute(dir)) continue

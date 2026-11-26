@@ -2,7 +2,7 @@ import { clipboard, ipcMain } from 'electron'
 import type { BrowserWindow, IpcMainInvokeEvent } from 'electron'
 import { usageChannels } from '../shared/ipc'
 import { pricingSettingsSchema, uiPreferencesSchema, usageSummaryInputSchema } from '../shared/types'
-import type { UsageSummary, UsageSummaryInput } from '../shared/types'
+import type { PricePreset, UsageSummary, UsageSummaryInput } from '../shared/types'
 import { accountChangesSchema, addManualAccountSchema, startAccountLoginSchema } from '../shared/limitsTypes'
 import type { AccountsReport } from '../shared/limitsTypes'
 import { readConfig, updateConfig } from './configStore'
@@ -22,7 +22,8 @@ export function registerIpc(
   updater: ReturnType<typeof createUpdater>,
   openExternal: (url: string) => Promise<void>,
   tray: ReturnType<typeof createTrayPanel>,
-  switchAccount: (id: string) => Promise<AccountsReport>
+  switchAccount: (id: string) => Promise<AccountsReport>,
+  getPricePresets: () => Promise<PricePreset[]>
 ): void {
   function matches(event: IpcMainInvokeEvent, window: BrowserWindow | undefined): window is BrowserWindow {
     return !!window && !window.isDestroyed() && event.sender === window.webContents
@@ -68,14 +69,18 @@ export function registerIpc(
   })
   ipcMain.handle(usageChannels.pricingSettings, async (event) => {
     ownWindow(event)
-    const { priceOverrides, modelAliases } = await readConfig(userData)
-    return { priceOverrides, modelAliases }
+    const { priceOverrides } = await readConfig(userData)
+    return { priceOverrides }
+  })
+  ipcMain.handle(usageChannels.pricePresets, event => {
+    ownWindow(event)
+    return getPricePresets()
   })
   ipcMain.handle(usageChannels.savePricing, async (event, input: unknown) => {
     ownWindow(event)
     const parsed = pricingSettingsSchema.safeParse(input)
     if (!parsed.success) throw new Error('Invalid pricing settings')
-    await updateConfig(userData, config => ({ ...config, ...parsed.data }))
+    await updateConfig(userData, config => ({ ...config, priceOverrides: parsed.data.priceOverrides }))
   })
 
   function updated<T extends AccountsReport | null>(result: T): T {

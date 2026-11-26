@@ -2,7 +2,6 @@ import { normalizeModelId } from "../../shared/modelNormalize";
 import {
   EMPTY_TOTALS,
   totalTokens,
-  type ModelAliases,
   type PriceOverrides,
   type UsageBucket,
   type UsageRecord,
@@ -47,35 +46,6 @@ export function createUsageWindowFilter(query: UsageSummaryInput): (timestampMs:
   return createUsageWindow(query).includes;
 }
 
-function resolveModelAliases(aliases: ModelAliases): Map<string, string | null> {
-  const keys = Object.keys(aliases);
-  const folded = new Map<string, string>();
-  for (const key of keys) {
-    const lower = key.toLowerCase();
-    if (!folded.has(lower) || key === lower) folded.set(lower, key);
-  }
-  const aliasKey = (model: string) =>
-    Object.hasOwn(aliases, model) ? model : folded.get(model.toLowerCase());
-  const resolved = new Map<string, string | null>();
-  for (const model of keys) {
-    if (resolved.has(model)) continue;
-    const path: string[] = [];
-    let target = model;
-    let key = aliasKey(target);
-    while (key !== undefined && !resolved.has(key)) {
-      path.push(key);
-      // Null marks both active walks and paths that terminate in cycles.
-      resolved.set(key, null);
-      target = aliases[key];
-      key = aliasKey(target);
-    }
-    const terminal = key === undefined ? target : (resolved.get(key) ?? null);
-    for (const alias of path) resolved.set(alias, terminal);
-  }
-  for (const [lower, key] of folded) if (!resolved.has(lower)) resolved.set(lower, resolved.get(key) ?? null);
-  return resolved;
-}
-
 /** Keep the first copy's dimensions, but merge partial copies channel by channel. */
 export function mergeUsageCopies(held: UsageRecord, copy: UsageRecord): UsageRecord {
   const a = held.totals;
@@ -109,7 +79,6 @@ export function aggregateUsage(
   query: UsageSummaryInput,
   pricing: PricingResult,
   overrides: PriceOverrides,
-  aliases: ModelAliases,
   opencodePricing?: OpenCodePriceTables,
 ): UsageBucket[] {
   const window = createUsageWindow(query);
@@ -118,19 +87,13 @@ export function aggregateUsage(
     opencodeUserRates: opencodePricing?.userRates,
     opencodeCatalogRates: opencodePricing?.catalogRates,
   };
-  const aliasTargets = resolveModelAliases(aliases);
   const buckets = new Map<string, MutableBucket>();
   const keyed = new Map<string, UsageRecord>();
 
   function accumulate(input: UsageRecord) {
     if (!window.includes(input.timestampMs)) return;
-    const normalized = normalizeModelId(input.provider, input.model);
-    const target = aliasTargets.get(normalized);
-    const alias = target === undefined ? aliasTargets.get(normalized.toLowerCase()) : target;
-    const model = alias !== null && alias !== undefined && alias.includes("/")
-      ? normalizeModelId(input.provider, alias) : (alias ?? normalized);
-    // An explicit alias reprices at its target, not at the original record's rate hint.
-    const record = { ...input, model, rateModel: model === normalized ? input.rateModel : undefined };
+    const model = normalizeModelId(input.provider, input.model);
+    const record = { ...input, model };
     const day = window.dayAt(record.timestampMs);
     const hourStart = query.resolution === "hour"
       ? new Date(window.start + Math.floor((record.timestampMs - window.start) / HOUR_MS) * HOUR_MS).toISOString()

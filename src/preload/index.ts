@@ -17,6 +17,7 @@ const usageApi: UsageApi = {
   hide: () => ipcRenderer.invoke(usageChannels.hide),
   getSummary: (query, refresh) => ipcRenderer.invoke(usageChannels.summary, query, refresh),
   getPricingSettings: () => ipcRenderer.invoke(usageChannels.pricingSettings),
+  getPricePresets: () => ipcRenderer.invoke(usageChannels.pricePresets),
   savePricingSettings: (settings) => ipcRenderer.invoke(usageChannels.savePricing, settings),
   getLimits: () => ipcRenderer.invoke(usageChannels.limits),
   refreshLimits: () => ipcRenderer.invoke(usageChannels.refreshLimits),

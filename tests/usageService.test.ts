@@ -32,14 +32,15 @@ test('scans a shared root once, caches unchanged files, and retains auto-pruned 
     expect(first.sources.find(s => s.provider === 'claude')).toMatchObject({ scannedFiles: 1, distinctSessions: 1 })
     expect(first.buckets).toHaveLength(1)
     expect(first.buckets[0]).toMatchObject({ model: 'claude-sonnet-4-6', records: 1, totals: { uncachedInputTokens: 100 } })
-    await writeConfig(userData, {
+    await writeFile(join(userData, 'config.json'), JSON.stringify({
       ...config,
-      modelAliases: { 'claude-sonnet-4-6': 'example-alias' },
-      priceOverrides: { 'example-alias': { inputCostPerMillionTokens: 5, outputCostPerMillionTokens: 50 } }
-    })
+      modelAliases: { 'claude-sonnet-4-6': 'legacy-ignored' },
+      priceOverrides: { 'claude-sonnet-4-6': { inputCostPerMillionTokens: 5, outputCostPerMillionTokens: 50 } }
+    }))
     const repriced = await service.getSummary(query)
     expect(repriced.readAt).toBe(first.readAt)
-    expect(repriced.buckets[0]).toMatchObject({ model: 'example-alias', costUsd: 0.001 })
+    expect(repriced.buckets[0]).toMatchObject({ model: 'claude-sonnet-4-6', costUsd: 0.001 })
+    expect(await readConfig(userData)).not.toHaveProperty('modelAliases')
     await writeConfig(userData, config)
     const cached = await service.getSummary(query, true)
     expect(cached.sources.find(s => s.provider === 'claude')).toMatchObject({ scannedFiles: 0, skippedFiles: 1 })

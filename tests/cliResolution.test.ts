@@ -95,4 +95,15 @@ describe('Windows CLI resolution', () => {
     await write(join(managed, 'active.json'), JSON.stringify({ releaseId }))
     expect(await resolveWindowsAgyCli({ home, env: {}, arch: 'x64' })).toBeUndefined()
   })
+
+  it('matches agy.exe on PATH but never the Antigravity desktop GUI executable', async () => {
+    const home = await realpath(root)
+    const path = join(root, 'desktop app')
+    env.PATH = path
+    const gui = await executable(path, 'Antigravity.exe')
+    expect(await resolveWindowsAgyCli({ home, env, arch: 'x64' })).toBeUndefined()
+    const cli = await executable(path, 'agy.exe')
+    expect(await resolveWindowsAgyCli({ home, env, arch: 'x64' })).toBe(cli)
+    expect(cli).not.toBe(gui)
+  })
 })

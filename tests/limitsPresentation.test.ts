@@ -1,22 +1,23 @@
 import { createElement, createRef, type ComponentProps } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { LimitDetails, LimitsView } from '../src/renderer/components/LimitsView'
+import { LimitDetails, LimitIssueGuide, LimitsView } from '../src/renderer/components/LimitsView'
 import {
-  limitIssueText, limitTimeLeft, resetBadgeDuration, resetCreditText, resetDetailTime, visibleLimitIssues
+  agyCliInstallReason, agyCliInstallUrl, limitIssueGuidance, limitTimeLeft, resetBadgeDuration,
+  resetCreditText, resetDetailTime, visibleLimitIssues
 } from '../src/renderer/limitsPresentation'
 import type { LimitAccountIssue, LimitsReport } from '../src/shared/limitsTypes'
 import type { UsageProviderKind } from '../src/shared/types'
 
 const expired: LimitAccountIssue = {
-  id: 'agy-1', provider: 'antigravity', displayName: '工作账号', origin: 'native',
+  id: 'agy-1', provider: 'antigravity', displayName: 'work@example.com', origin: 'manual',
   reason: 'expired', cached: false
 }
 const missingCli: LimitAccountIssue = {
-  ...expired, id: 'agy-2', displayName: '备用账号', reason: 'cli_missing'
+  ...expired, id: 'agy-2', displayName: 'backup@example.com', reason: 'cli_missing'
 }
 const failed: LimitAccountIssue = {
-  id: 'codex-1', provider: 'codex', displayName: '本地账号', origin: 'native',
+  id: 'codex-1', provider: 'codex', displayName: 'local@example.com', origin: 'native',
   reason: 'failed', cached: false
 }
 const report: LimitsReport = {
@@ -26,7 +27,7 @@ const report: LimitsReport = {
 function renderView(props: Partial<ComponentProps<typeof LimitsView>> = {}) {
   return renderToStaticMarkup(createElement(LimitsView, {
     report, hiddenProviders: new Set<UsageProviderKind>(), loading: false, refreshing: false, failed: false,
-    onRefresh: () => {}, onReport: () => {}, ...props
+    onRefresh: () => {}, onReport: () => {}, onOpenAccounts: () => {}, ...props
   }))
 }
 
@@ -43,10 +44,30 @@ describe('limit issue presentation', () => {
   })
 
   it('explains expired credentials, the missing CLI and whether a failed read has cached data', () => {
-    expect(limitIssueText(expired)).toBe('「工作账号」登录凭证已过期，请在 Antigravity 中重新登录后重试')
-    expect(limitIssueText(missingCli)).toBe('「备用账号」登录凭证已过期，未找到可用的 agy CLI')
-    expect(limitIssueText(failed)).toBe('「本地账号」无法读取额度')
-    expect(limitIssueText({ ...failed, cached: true })).toBe('「本地账号」刷新失败，当前显示缓存数据')
+    expect(limitIssueGuidance(expired, false)).toEqual({
+      message: '登录已失效，请在「账号管理」重新登录。',
+      accountManagement: true
+    })
+    expect(limitIssueGuidance(expired, true)).toEqual({
+      message: '登录已过期，请在客户端重新登录后重试。', accountManagement: false
+    })
+    expect(limitIssueGuidance({ ...expired, origin: 'native' }, false)).toEqual({
+      message: '登录已过期，请在客户端重新登录后重试。', accountManagement: false
+    })
+    expect(limitIssueGuidance(missingCli, true)).toEqual({
+      message: '未装 agy CLI，无法更新该账号的登录凭证，请安装 agy CLI：',
+      installUrl: agyCliInstallUrl,
+      installReason: agyCliInstallReason,
+      accountManagement: false
+    })
+    expect(limitIssueGuidance(missingCli, false)).toEqual({
+      message: '未装 agy CLI，无法更新该账号的登录凭证，请安装 agy CLI：',
+      installUrl: agyCliInstallUrl,
+      installReason: agyCliInstallReason,
+      accountManagement: false
+    })
+    expect(limitIssueGuidance(failed, false).message).toBe('无法读取额度，请稍后重试。')
+    expect(limitIssueGuidance({ ...failed, cached: true }, false).message).toBe('刷新失败，当前显示缓存额度。')
   })
 })
 
@@ -89,22 +110,28 @@ describe('limit timing presentation', () => {
 })
 
 describe('LimitsView account notices', () => {
-  it('shows filtered issue messages in one polite status with a shared retry, not an empty state', () => {
+  it('keeps issue-only accounts in the provider pill row without a page-level warning', () => {
     const html = renderView({ hiddenProviders: hide('codex', 'claude') })
-    expect(html).toContain('limit-warning-alert')
-    expect(html).toMatch(/role="status"[^>]*><ul/)
-    expect(html).toContain(limitIssueText(expired))
-    expect(html).toContain(limitIssueText(missingCli))
-    expect(html).not.toContain(limitIssueText(failed))
-    expect(html.match(/>重试<\/button>/g)).toHaveLength(1)
+    expect(html).not.toContain('limit-warning-alert')
+    expect(html).toContain('Antigravity')
+    expect(html).toContain('class="limit-pill-name">work@example.com')
+    expect(html).toContain('class="limit-pill-name">backup@example.com')
+    expect(html.match(/data-issue="true"/g)).toHaveLength(2)
+    expect(html.match(/data-switchable="true"/g)).toBeNull()
+    expect(html).not.toContain('切换')
+    expect(html.match(/class="[^"]*limit-pill-warning/g)).toHaveLength(2)
+    const pill = html.match(/<button[^>]*data-issue="true"[^>]*>.*?<\/button>/)?.[0]
+    expect(pill).toContain('<span class="sr-only">，额度读取异常</span>')
+    expect(pill).not.toContain('title=')
+    expect(html).not.toContain('class="limit-window"')
     expect(html).not.toContain('暂无可用额度')
   })
 
   it('shows only the common failure notice when the IPC request fails', () => {
-    const html = renderView({ failed: true })
+    const html = renderView({ report: { ...report, issues: undefined }, failed: true })
     expect(html).toContain('role="alert"')
     expect(html).toContain('无法读取额度。')
-    expect(html).not.toContain(limitIssueText(expired))
+    expect(html).not.toContain('limit-warning-alert')
     expect(html.match(/>重试<\/button>/g)).toHaveLength(1)
     expect(html).not.toContain('暂无可用额度')
   })
@@ -113,10 +140,10 @@ describe('LimitsView account notices', () => {
     expect(renderView({ hiddenProviders: hide('codex', 'antigravity') })).toContain('暂无可用额度')
     expect(renderView({ report: { ...report, issues: undefined } })).toContain('暂无可用额度')
     expect(renderView({ hiddenProviders: hide('codex', 'antigravity'), loading: true })).not.toContain('暂无可用额度')
-    expect(renderView({ refreshing: true })).toMatch(/<button[^>]+disabled=""[^>]*>重试<\/button>/)
+    expect(renderView({ report: { ...report, issues: undefined }, refreshing: true })).not.toContain('暂无可用额度')
   })
 
-  it('keeps quota cards visible alongside notices', () => {
+  it('keeps quota cards visible alongside an issue pill', () => {
     const html = renderView({
       report: {
         ...report,
@@ -128,10 +155,82 @@ describe('LimitsView account notices', () => {
         issues: [{ ...failed, cached: true }]
       }
     })
-    expect(html).toContain('刷新失败，当前显示缓存数据')
     expect(html).toContain('5 小时额度')
     expect(html).toContain('70%')
-    expect(html.indexOf('limit-window')).toBeLessThan(html.indexOf('limit-warning-alert'))
+    expect(html).toMatch(/class="limit-segment"[^>]*data-issue="true"/)
+    expect(html).not.toContain('limit-warning-alert')
+  })
+
+  it('keeps the current marker and puts the warning icon right beside it', () => {
+    const html = renderView({
+      report: {
+        ...report,
+        accounts: [{
+          id: missingCli.id, provider: missingCli.provider, displayName: missingCli.displayName,
+          origin: missingCli.origin, current: true, canSwitch: true, windows: [],
+          checkedAt: '2026-11-24T12:00:00Z', stale: true
+        }],
+        issues: [missingCli]
+      }
+    })
+    expect(html).toContain('data-issue="true" data-current="true"')
+    expect(html).toMatch(/当前<\/span><svg[^>]*class="[^"]*limit-pill-warning/)
+    expect(html).not.toContain('data-switchable="true"')
+  })
+})
+
+describe('LimitIssueGuide', () => {
+  const renderGuide = (
+    issue: LimitAccountIssue,
+    props: { refreshing?: boolean; current?: boolean } = {}
+  ) => renderToStaticMarkup(createElement(LimitIssueGuide, {
+    id: 'guide', issue, account: props.current === undefined ? undefined : {
+      id: issue.id, displayName: issue.displayName, origin: issue.origin, current: props.current
+    },
+    refreshing: props.refreshing ?? false, onRefresh: () => {}, onOpenAccounts: () => {}
+  }))
+
+  it('renders the CLI recovery guidance, install link, help icon and retry action', () => {
+    const html = renderGuide(missingCli)
+    expect(html).toContain('未装 agy CLI，无法更新该账号的登录凭证，请安装 agy CLI：')
+    expect(html).toContain(`<span>${agyCliInstallUrl}</span>`)
+    expect(html).toContain(`aria-label="${agyCliInstallReason.title}"`)
+    expect(html).toContain('>重试</button>')
+    expect(html).not.toContain('账号管理')
+    expect(renderGuide(missingCli, { current: true })).toContain('未装 agy CLI，无法更新该账号的登录凭证，请安装 agy CLI：')
+  })
+
+  it('spins the pill and popover warning icons and marks segments refreshing during retry', () => {
+    const html = renderView({
+      refreshing: true,
+      report: {
+        ...report,
+        accounts: [{
+          id: missingCli.id, provider: missingCli.provider, displayName: missingCli.displayName,
+          origin: missingCli.origin, windows: [{ id: 'session', label: '5-hour', kind: 'session', usedPercent: 30 }],
+          checkedAt: '2026-11-24T12:00:00Z', stale: true
+        }],
+        issues: [missingCli]
+      }
+    })
+    expect(html).toMatch(/class="[^"]*limit-pill-warning[^"]*animate-spin/)
+    expect(html).toMatch(/class="limit-segment"[^>]*data-issue="true" data-refreshing="true"/)
+    expect(renderGuide(missingCli, { refreshing: true })).toMatch(/class="[^"]*limit-pill-warning[^"]*animate-spin/)
+  })
+
+  it('offers account management for a manual expired non-current account', () => {
+    const manual = { ...expired, origin: 'manual' as const }
+    const html = renderGuide(manual)
+    expect(html).toContain('登录已失效，请在「账号管理」重新登录。')
+    expect(html).toContain('>账号管理</button>')
+    expect(renderGuide(manual, { current: true })).not.toContain('>账号管理</button>')
+  })
+
+  it('keeps retry focusable with aria-disabled while refreshing', () => {
+    const html = renderGuide(failed, { refreshing: true })
+    expect(html).toContain('重试中…')
+    expect(html).toMatch(/aria-disabled="true"[^>]*aria-busy="true"/)
+    expect(html).not.toMatch(/<button[^>]+disabled=""/)
   })
 })
 
@@ -150,10 +249,11 @@ describe('LimitsView segments', () => {
     vi.useFakeTimers()
     vi.setSystemTime(fixedNow)
     try {
-      const html = renderView({ report: { ...report, accounts: [
+      const html = renderView({ report: { ...report, issues: undefined, accounts: [
         { ...codex, windows: [window] }, { ...agy, windows: [window] },
         { ...agy, id: 'agy-2', displayName: 'backup@example.com', windows: [{ ...window, usedPercent: 0 }] }
       ] } })
+      expect(html).toContain('aria-label="账号"')
       expect(html.match(/popover="auto"/g)).toHaveLength(1)
       // Emails live in the header pills; the segment strips themselves stay clean.
       expect(html.match(/class="limit-account-name"/g)).toBeNull()
@@ -171,7 +271,7 @@ describe('LimitsView segments', () => {
   })
 
   it('renders a switchable pill and leaves an empty column for a missing quota window', () => {
-    const html = renderView({ report: { ...report, accounts: [
+    const html = renderView({ report: { ...report, issues: undefined, accounts: [
       { ...agy, current: true, canSwitch: true, windows: [window, {
         ...window, id: 'weekly', label: 'Weekly', kind: 'weekly', windowDurationMins: 10080
       }] },
@@ -197,5 +297,17 @@ describe('LimitsView segments', () => {
     expect(html).toContain('<dt>匀速进度</dt>')
     expect(html).toContain('<dt>恢复</dt>')
     expect(html).not.toMatch(/来源|limit-detail-group/)
+
+    const staleHtml = renderToStaticMarkup(createElement(LimitDetails, {
+      id: 'details-stale', provider: 'antigravity', now: fixedNow, redeeming: false,
+      creditButton: createRef<HTMLButtonElement>(), onReset: vi.fn(),
+      account: {
+        id: 'work', displayName: agy.displayName, origin: 'native', checkedAt: after(0), stale: true,
+        capacitySharePercent: 50, remainingPercent: 55, recoveryPercent: 8, resetStatus: 'upcoming',
+        resetsAt: window.resetsAt, windowDurationMins: window.windowDurationMins
+      }
+    }))
+    expect(staleHtml).toContain('<dt>刷新时间</dt>')
+    expect(staleHtml).not.toContain('缓存数据')
   })
 })

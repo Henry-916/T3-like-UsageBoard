@@ -1,11 +1,11 @@
 import type { Worker } from 'node:worker_threads'
-import type { UsageSummary, UsageSummaryInput } from '../../shared/types'
+import type { PricePreset, UsageSummary, UsageSummaryInput } from '../../shared/types'
 import startWorker from './worker?nodeWorker'
 import type { UsageWorkerRequest, UsageWorkerResponse } from './workerProtocol'
 
 export function createUsageClient(userData: string, fallbackRates: string) {
   const pending = new Map<number, {
-    resolve: (value: UsageSummary) => void
+    resolve: (value: any) => void
     reject: (error: Error) => void
   }>()
   let worker: Worker | undefined
@@ -22,6 +22,7 @@ export function createUsageClient(userData: string, fallbackRates: string) {
       const request = pending.get(message.id)
       pending.delete(message.id)
       if ('summary' in message) request?.resolve(message.summary)
+      else if ('presets' in message) request?.resolve(message.presets)
       else request?.reject(new Error(message.error))
     })
     const stopped = (): void => {
@@ -35,20 +36,27 @@ export function createUsageClient(userData: string, fallbackRates: string) {
     return instance
   }
 
+  function send<T>(payload: { type?: 'summary'; query: UsageSummaryInput; refresh: boolean } | { type: 'presets' }): Promise<T> {
+    worker ??= start()
+    const instance = worker
+    const message = { id: nextId++, ...payload } as UsageWorkerRequest
+    return new Promise((resolve, reject) => {
+      pending.set(message.id, { resolve, reject })
+      try {
+        instance.postMessage(message)
+      } catch (error) {
+        pending.delete(message.id)
+        reject(error)
+      }
+    })
+  }
+
   return {
-    async getSummary(query: UsageSummaryInput, refresh = false): Promise<UsageSummary> {
-      worker ??= start()
-      const instance = worker
-      const message: UsageWorkerRequest = { id: nextId++, query, refresh }
-      return new Promise((resolve, reject) => {
-        pending.set(message.id, { resolve, reject })
-        try {
-          instance.postMessage(message)
-        } catch (error) {
-          pending.delete(message.id)
-          reject(error)
-        }
-      })
+    getSummary(query: UsageSummaryInput, refresh = false): Promise<UsageSummary> {
+      return send({ type: 'summary', query, refresh })
+    },
+    getPricePresets(): Promise<PricePreset[]> {
+      return send({ type: 'presets' })
     },
     stop(): void {
       const instance = worker

@@ -214,6 +214,7 @@ export function createAccountLoginManager(options: LoginOptions) {
     }
     try {
       const [label, command] = providers[provider]
+      const cliName = `${label} CLI`
       let executable: string | undefined
       if (provider === 'antigravity') {
         executable = await (options.resolveAgyCli ?? resolveAgyCli)()
@@ -222,7 +223,7 @@ export function createAccountLoginManager(options: LoginOptions) {
       }
       signal.throwIfAborted()
       if (!executable) {
-        message = `未检测到 ${label} CLI（${command}），请先安装 ${label}${provider === 'codex' ? ' CLI' : ''} 后再登录。`
+        message = `未检测到 ${cliName}（${command}），请先安装 ${cliName} 后再登录。`
         return
       }
       if (!isAbsolute(executable) || (process.platform === 'win32' && !/\.exe$/i.test(executable))) return

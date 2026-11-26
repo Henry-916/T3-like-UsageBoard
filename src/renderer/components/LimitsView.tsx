@@ -1,12 +1,13 @@
-import { Clock3, Gauge, Ticket, TrendingDown, TrendingUp, TriangleAlert } from 'lucide-react'
+import { ArrowUpRight, CircleHelp, Clock3, Gauge, LoaderCircle, Ticket, TrendingDown, TrendingUp, TriangleAlert } from 'lucide-react'
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState,
   type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
-import type { AccountView, ConsumeResetCreditOutcome, LimitsReport } from '../../shared/limitsTypes'
+import type { AccountView, ConsumeResetCreditOutcome, LimitAccountIssue, LimitsReport } from '../../shared/limitsTypes'
 import type { UsageProviderKind } from '../../shared/types'
 import { poolUsageLimits, type PooledLimitAccount, type PooledLimitWindow } from '../../shared/usageLimits'
 import {
-  formatLimitPercent, limitDateTime, limitIssueText, limitTimeLeft,
-  resetBadgeDuration, resetCreditText, resetDetailTime, visibleLimitIssues
+  formatLimitPercent, limitDateTime, limitIssueGuidance, limitTimeLeft,
+  resetBadgeDuration, resetCreditText, resetDetailTime, visibleLimitIssues,
+  type LimitIssueReason
 } from '../limitsPresentation'
 import { providerInfo } from '../usagePresentation'
 import { accountSwitchErrorMessage, SwitchAccountConfirmation } from './AccountsDialog'
@@ -35,17 +36,19 @@ const segmentKey = (pool: PooledLimitWindow, account: PooledLimitAccount) =>
 
 // A provider's pill row and every window's segment row share this one account order,
 // so a member missing from a window still keeps its column as an inert placeholder.
-function accountColumns(windows: PooledLimitWindow[]): PooledLimitAccount[] {
-  const accounts = new Map<string, PooledLimitAccount>()
-  for (const pool of windows) {
-    for (const account of pool.accounts) if (!accounts.has(account.id)) accounts.set(account.id, account)
-  }
-  return [...accounts.values()].sort((a, b) =>
-    Number(Boolean(b.current)) - Number(Boolean(a.current)) ||
-    a.displayName.localeCompare(b.displayName, 'zh-CN') || a.id.localeCompare(b.id))
+interface AccountColumn {
+  id: string
+  displayName: string
+  origin: PooledLimitAccount['origin']
+  current?: boolean
+  canSwitch?: boolean
 }
 
-export function LimitsView({ report, hiddenProviders, loading, refreshing, failed, onRefresh, onReport }: {
+const byAccountOrder = (a: AccountColumn, b: AccountColumn) =>
+  Number(Boolean(b.current)) - Number(Boolean(a.current)) ||
+  a.displayName.localeCompare(b.displayName, 'zh-CN') || a.id.localeCompare(b.id)
+
+export function LimitsView({ report, hiddenProviders, loading, refreshing, failed, onRefresh, onReport, onOpenAccounts }: {
   report: LimitsReport | null
   hiddenProviders: ReadonlySet<UsageProviderKind>
   loading: boolean
@@ -53,6 +56,7 @@ export function LimitsView({ report, hiddenProviders, loading, refreshing, faile
   failed: boolean
   onRefresh: () => void
   onReport: (report: LimitsReport) => void
+  onOpenAccounts: () => void
 }) {
   const [now, setNow] = useState(Date.now)
   useEffect(() => {
@@ -61,12 +65,27 @@ export function LimitsView({ report, hiddenProviders, loading, refreshing, faile
   }, [])
   const accounts = report?.accounts
   const pools = useMemo(() => poolUsageLimits(accounts ?? [], now), [accounts, now])
-  const sections = limitsProviders.filter((provider) => !hiddenProviders.has(provider)).map((provider) => ({
-    provider, windows: pools.filter((pool) => pool.provider === provider && pool.accounts.length > 0)
-  })).filter((section) => section.windows.length > 0).map((section) => ({
-    ...section, accounts: accountColumns(section.windows)
-  }))
-  const issues = visibleLimitIssues(report?.issues, hiddenProviders)
+  const issues = useMemo(() => visibleLimitIssues(report?.issues, hiddenProviders), [report?.issues, hiddenProviders])
+  const issueIds = useMemo(() => new Set(issues.map(({ id }) => id)), [issues])
+  const accountViews = useMemo(() => new Map((accounts ?? []).map((account) => [account.id, account])), [accounts])
+  const sections = limitsProviders.filter((provider) => !hiddenProviders.has(provider)).map((provider) => {
+    const windows = pools.filter((pool) => pool.provider === provider)
+    const columns = new Map<string, AccountColumn>()
+    for (const pool of windows) {
+      for (const account of pool.accounts) if (!columns.has(account.id)) columns.set(account.id, account)
+    }
+    // An account whose last read failed can have no cached windows at all; keep
+    // its pill so the diagnostic stays discoverable instead of disappearing.
+    for (const issue of issues.filter((issue) => issue.provider === provider)) {
+      if (columns.has(issue.id)) continue
+      const view = accountViews.get(issue.id)
+      columns.set(issue.id, {
+        id: issue.id, displayName: issue.displayName, origin: issue.origin,
+        current: view?.current, canSwitch: view?.canSwitch
+      })
+    }
+    return { provider, windows, accounts: [...columns.values()].sort(byAccountOrder) }
+  }).filter((section) => section.accounts.length > 0)
 
   const viewRef = useRef<HTMLElement>(null)
   const popoverRef = useRef<AnchoredPopover>(null)
@@ -88,7 +107,11 @@ export function LimitsView({ report, hiddenProviders, loading, refreshing, faile
   const [switchBusy, setSwitchBusy] = useState(false)
   const [switchError, setSwitchError] = useState('')
   const detail = selection && findSegment(sections, selection.key)
-  const hasDetail = Boolean(detail)
+  const issue = selection && findIssue(issues, selection.key)
+  const hasDetail = Boolean(detail || issue)
+  const issueAccount = issue
+    ? sections.flatMap(({ accounts }) => accounts).find(({ id }) => id === issue.id)
+    : undefined
 
   function clearTimer() {
     window.clearTimeout(timer.current)
@@ -161,7 +184,8 @@ export function LimitsView({ report, hiddenProviders, loading, refreshing, faile
         bounds.left + (bounds.width - width) / 2, viewport.clientWidth - width - 12))
       const above = bounds.top - height - 6
       const below = bounds.bottom + 6
-      const top = above >= 12 || viewport.clientHeight - below < bounds.top
+      const issueAnchor = selection?.key.startsWith('issue:')
+      const top = issueAnchor ? below : above >= 12 || viewport.clientHeight - below < bounds.top
         ? above : below
       panel.style.left = `${left}px`
       panel.style.top = `${Math.max(12, Math.min(top, viewport.clientHeight - height - 12))}px`
@@ -258,7 +282,7 @@ export function LimitsView({ report, hiddenProviders, loading, refreshing, faile
 
   const interaction: SegmentInteraction = {
     id: popoverId,
-    openKey: detail ? selection?.key : undefined,
+    openKey: hasDetail ? selection?.key : undefined,
     enter(anchor) {
       clearTimer()
       const previous = activeRef.current
@@ -297,23 +321,14 @@ export function LimitsView({ report, hiddenProviders, loading, refreshing, faile
     }
   }
 
-  const warning = !failed && issues.length > 0 && (
-    <div className="limit-warning-alert">
-      <TriangleAlert size={16} aria-hidden="true" />
-      <div role="status"><ul role="list">{issues.map((issue) => <li key={issue.id}>{limitIssueText(issue)}</li>)}</ul></div>
-      <button type="button" className="action-button" disabled={refreshing} onClick={onRefresh}>重试</button>
-    </div>
-  )
-
   return (
-    <section ref={viewRef} tabIndex={-1} aria-label="限制" className="limits-view">
+    <section ref={viewRef} tabIndex={-1} aria-label="账号" className="limits-view">
       {failed && (
         <div className="inline-notice flex flex-wrap items-center gap-3" role="alert">
           <p>{sections.length ? '无法更新额度，仍显示上次读取的数据。' : '无法读取额度。'}</p>
           <button type="button" className="action-button" disabled={refreshing} onClick={onRefresh}>重试</button>
         </div>
       )}
-      {sections.length === 0 && warning}
       {sections.length === 0 && (loading || refreshing ? (
         <div className="limits-loading" role="status">
           <span className="sr-only">正在读取额度</span>
@@ -321,7 +336,7 @@ export function LimitsView({ report, hiddenProviders, loading, refreshing, faile
           <div aria-hidden="true" className="skeleton h-24 w-full" />
           <div aria-hidden="true" className="skeleton h-24 w-full" />
         </div>
-      ) : !failed && issues.length === 0 && <p className="view-placeholder">暂无可用额度</p>)}
+      ) : !failed && <p className="view-placeholder">暂无可用额度</p>)}
       {sections.map((section) => (
         <section key={section.provider} aria-labelledby={`limits-${section.provider}`} className="limits-provider">
           <div className="limits-provider-header">
@@ -332,26 +347,28 @@ export function LimitsView({ report, hiddenProviders, loading, refreshing, faile
             <div className="limit-account-pills" role="group" aria-label="账号"
               style={{ gridTemplateColumns: `repeat(${section.accounts.length}, minmax(0, 1fr))` }}>
               {section.accounts.map((account) => (
-                <LimitAccountPill key={account.id} account={account} provider={section.provider} onSwitch={() => {
-                  setSwitchError('')
-                  setSwitchTarget({
-                    id: account.id, provider: section.provider, displayName: account.displayName,
-                    origin: account.origin, enabled: true, current: account.current, canSwitch: account.canSwitch,
-                    hasCredential: true
-                  })
-                }} />
+                <LimitAccountPill key={account.id} account={account} provider={section.provider}
+                  issue={issues.find((candidate) => candidate.id === account.id)} refreshing={refreshing}
+                  interaction={interaction}
+                  onSwitch={() => {
+                    setSwitchError('')
+                    setSwitchTarget({
+                      id: account.id, provider: section.provider, displayName: account.displayName,
+                      origin: account.origin, enabled: true, current: account.current, canSwitch: account.canSwitch,
+                      hasCredential: true
+                    })
+                  }} />
               ))}
             </div>
           </div>
           {section.windows.map((pool) => (
-            <LimitWindowCard key={`${pool.kind}/${pool.windowId}`} pool={pool} now={now} interaction={interaction}
-              columns={section.accounts} />
+            <LimitWindowCard key={`${pool.kind}/${pool.windowId}`} pool={pool} now={now} refreshing={refreshing}
+              interaction={interaction} columns={section.accounts} issueIds={issueIds} />
           ))}
           {section.provider === 'codex' && <div role="status" className={feedback ? 'limit-reset-feedback' : 'sr-only'}
             data-error={Boolean(feedback?.error)}>{feedback?.message}</div>}
         </section>
       ))}
-      {sections.length > 0 && warning}
       {!hiddenProviders.has('codex') && feedback && !sections.some(({ provider }) => provider === 'codex') &&
         <p role="status" className="limit-reset-feedback" data-error={feedback.error}>{feedback.message}</p>}
       <div id={popoverId} ref={popoverRef} className="limit-popover" popover="auto" role="group" tabIndex={-1}
@@ -375,6 +392,11 @@ export function LimitsView({ report, hiddenProviders, loading, refreshing, faile
           <LimitDetails id={`${popoverId}-title`} account={detail.account} provider={detail.pool.provider} now={now}
             redeeming={redeeming.has(detail.account.id)} creditButton={creditButton}
             onReset={() => openConfirmation(selection, detail.account)} />
+        )}
+        {selection && issue && (
+          <LimitIssueGuide key={issue.id} id={`${popoverId}-title`} issue={issue} account={issueAccount}
+            refreshing={refreshing} onRefresh={onRefresh}
+            onOpenAccounts={() => { closePopover(); onOpenAccounts() }} />
         )}
       </div>
       {confirming && (
@@ -416,11 +438,19 @@ function findSegment(sections: { windows: PooledLimitWindow[] }[], key: string) 
   return null
 }
 
-function LimitWindowCard({ pool, now, interaction, columns }: {
+const issueKey = (id: string) => `issue:${id}`
+
+function findIssue(issues: readonly LimitAccountIssue[], key: string) {
+  return issues.find(({ id }) => issueKey(id) === key)
+}
+
+function LimitWindowCard({ pool, now, refreshing, interaction, columns, issueIds }: {
   pool: PooledLimitWindow
   now: number
+  refreshing: boolean
   interaction: SegmentInteraction
-  columns: PooledLimitAccount[]
+  columns: readonly AccountColumn[]
+  issueIds: ReadonlySet<string>
 }) {
   const titleId = useId()
   const next = pool.nextReset
@@ -442,23 +472,52 @@ function LimitWindowCard({ pool, now, interaction, columns }: {
       <div className="limit-accounts" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }}>
         {columns.map((column) => {
           const account = shown.get(column.id)
+          const hasIssue = issueIds.has(column.id)
           return account
             ? <LimitAccountSegment key={column.id} account={account} now={now} provider={pool.provider}
-              accountKey={segmentKey(pool, account)} accountCount={pool.accounts.length} interaction={interaction} />
-            : <span key={column.id} className="limit-account-slot" aria-hidden="true" />
+              accountKey={segmentKey(pool, account)} accountCount={pool.accounts.length}
+              hasIssue={hasIssue} refreshing={refreshing} interaction={interaction} />
+            : <span key={column.id} className="limit-account-slot" data-issue={hasIssue || undefined}
+              data-refreshing={refreshing || undefined} aria-hidden="true" />
         })}
       </div>
     </article>
   )
 }
 
-function LimitAccountPill({ account, provider, onSwitch }: {
-  account: PooledLimitAccount
+function LimitAccountPill({ account, provider, issue, refreshing, interaction, onSwitch }: {
+  account: AccountColumn
   provider: UsageProviderKind
+  issue?: LimitAccountIssue
+  refreshing: boolean
+  interaction: SegmentInteraction
   onSwitch: () => void
 }) {
-  const switchable = !account.current && account.canSwitch && (provider === 'codex' || provider === 'antigravity')
   const name = <span className="limit-pill-name">{account.displayName}</span>
+  if (issue) {
+    const key = issueKey(account.id)
+    const anchor = (button: HTMLButtonElement): Anchor => ({ key, button })
+    const warning = refreshing
+      ? <LoaderCircle size={13} className="limit-pill-warning motion-safe:animate-spin" aria-hidden="true" />
+      : <TriangleAlert size={13} className="limit-pill-warning" aria-hidden="true" />
+    return (
+      <button type="button" className="limit-account-pill" data-issue="true"
+        data-current={account.current ? 'true' : undefined}
+        aria-controls={interaction.id} aria-expanded={interaction.openKey === key}
+        onPointerEnter={(event) => { if (event.pointerType !== 'touch') interaction.enter(anchor(event.currentTarget)) }}
+        onPointerLeave={(event) => { if (event.pointerType !== 'touch') interaction.leave(anchor(event.currentTarget)) }}
+        onFocus={(event) => interaction.focus(anchor(event.currentTarget))}
+        onBlur={(event) => interaction.blur(anchor(event.currentTarget), event.relatedTarget)}
+        onClick={(event) => interaction.click(anchor(event.currentTarget), event.detail === 0)}
+        onKeyDown={(event) => interaction.keyDown(event, key)}>
+        {name}
+        {account.current && <span className="limit-pill-current">当前</span>}
+        {warning}
+        <span className="sr-only">，额度读取异常</span>
+      </button>
+    )
+  }
+  const switchable = !account.current && account.canSwitch && (provider === 'codex' || provider === 'antigravity')
   if (switchable) {
     return (
       <button type="button" className="limit-account-pill" data-switchable="true"
@@ -476,6 +535,108 @@ function LimitAccountPill({ account, provider, onSwitch }: {
   )
 }
 
+export function LimitIssueGuide({ id, issue, account, refreshing, onRefresh, onOpenAccounts }: {
+  id: string
+  issue: LimitAccountIssue
+  account?: AccountColumn
+  refreshing: boolean
+  onRefresh: () => void
+  onOpenAccounts: () => void
+}) {
+  const guidance = limitIssueGuidance(issue, Boolean(account?.current))
+
+  return (
+    <>
+      <div className="limit-issue-header">
+        <h4 id={id}>
+          {refreshing
+            ? <LoaderCircle size={14} className="limit-pill-warning motion-safe:animate-spin" aria-hidden="true" />
+            : <TriangleAlert size={14} className="limit-pill-warning" aria-hidden="true" />}
+          <span className="limit-account-name" title={issue.displayName}>{issue.displayName}</span>
+        </h4>
+        {guidance.installReason && <InstallReasonHelp reason={guidance.installReason} />}
+      </div>
+      <p className="limit-issue-guidance">{guidance.message}</p>
+      {guidance.installUrl && (
+        <button type="button" className="limit-install-link"
+          onClick={() => void window.usageApi.openExternalUrl(guidance.installUrl!).catch(() => undefined)}>
+          <span>{guidance.installUrl}</span>
+          <ArrowUpRight size={13} aria-hidden="true" />
+        </button>
+      )}
+      <div className="limit-detail-group limit-issue-actions">
+        {guidance.accountManagement && <button type="button" className="limit-reset-action" onClick={onOpenAccounts}>账号管理</button>}
+        <button type="button" className="limit-reset-action" aria-disabled={refreshing} aria-busy={refreshing}
+          onClick={() => { if (!refreshing) onRefresh() }}>
+          {refreshing
+            ? <><LoaderCircle size={13} className="motion-safe:animate-spin" aria-hidden="true" />重试中…</>
+            : '重试'}
+        </button>
+      </div>
+    </>
+  )
+}
+
+export function InstallReasonHelp({ reason }: { reason: LimitIssueReason }) {
+  const tipId = useId()
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const tipRef = useRef<HTMLSpanElement>(null)
+  const [pos, setPos] = useState<{ open: boolean; left?: number; top?: number; below?: boolean }>({ open: false })
+
+  useLayoutEffect(() => {
+    if (!pos.open || !buttonRef.current || !tipRef.current) return
+    function place() {
+      const button = buttonRef.current
+      const tip = tipRef.current
+      if (!button || !tip) return
+      const rect = button.getBoundingClientRect()
+      const tipWidth = tip.offsetWidth
+      const tipHeight = tip.offsetHeight
+      const left = Math.round(Math.min(
+        Math.max(8, rect.right - tipWidth),
+        Math.max(8, window.innerWidth - tipWidth - 8)
+      ))
+      const below = rect.top - tipHeight - 6 < 8
+      const top = Math.round(below ? rect.bottom + 6 : rect.top - tipHeight - 6)
+      setPos((current) => !current.open || (current.left === left && current.top === top && current.below === below)
+        ? current : { open: true, left, top, below })
+    }
+    place()
+    const close = () => setPos({ open: false })
+    window.addEventListener('resize', close)
+    window.addEventListener('scroll', close, true)
+    return () => {
+      window.removeEventListener('resize', close)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [pos.open])
+
+  return (
+    <>
+      <button ref={buttonRef} type="button" className="limit-issue-why"
+        aria-label={reason.title} aria-describedby={pos.open ? tipId : undefined}
+        onPointerEnter={(event) => { if (event.pointerType !== 'touch') setPos({ open: true }) }}
+        onPointerLeave={() => setPos({ open: false })}
+        onFocus={() => setPos({ open: true })}
+        onBlur={() => setPos({ open: false })}>
+        <CircleHelp size={14} aria-hidden="true" />
+      </button>
+      {pos.open && (
+        <span ref={tipRef} id={tipId} role="tooltip" className="limit-why-tip"
+          data-placement={pos.below ? 'below' : 'above'}
+          style={{
+            left: pos.left ?? 8,
+            top: pos.top ?? 8,
+            visibility: pos.left === undefined ? 'hidden' : 'visible'
+          }}>
+          <strong>{reason.title}</strong>
+          <span>{reason.body}</span>
+        </span>
+      )}
+    </>
+  )
+}
+
 const trends = {
   ahead: { icon: TrendingUp, label: '消耗偏快' },
   on: { icon: Gauge, label: '消耗平稳' },
@@ -488,12 +649,14 @@ function LimitTrend({ trend }: { trend: NonNullable<PooledLimitWindow['trend']> 
   return <span className="limit-trend" role="img" aria-label={description} title={description}><Icon size={14} aria-hidden="true" /></span>
 }
 
-function LimitAccountSegment({ account, now, provider, accountKey, accountCount, interaction }: {
+function LimitAccountSegment({ account, now, provider, accountKey, accountCount, hasIssue, refreshing, interaction }: {
   account: PooledLimitAccount
   now: number
   provider: UsageProviderKind
   accountKey: string
   accountCount: number
+  hasIssue: boolean
+  refreshing: boolean
   interaction: SegmentInteraction
 }) {
   const button = useRef<HTMLButtonElement>(null)
@@ -525,6 +688,7 @@ function LimitAccountSegment({ account, now, provider, accountKey, accountCount,
   return (
     <button ref={button} type="button" className="limit-segment" aria-label={caption} title={account.displayName}
       aria-controls={interaction.id} aria-expanded={open} data-open={open}
+      data-issue={hasIssue || undefined} data-refreshing={refreshing || undefined}
       style={tick ? { '--limit-tick-at': tick } as CSSProperties : undefined}
       data-pace={Boolean(tick)}
       onPointerEnter={(event) => { if (event.pointerType !== 'touch') interaction.enter(anchor(event.currentTarget)) }}
@@ -546,7 +710,7 @@ function LimitAccountSegment({ account, now, provider, accountKey, accountCount,
             {reset && <span className="limit-badge-muted">·</span>}
             <span className="limit-badge-credit"><Ticket size={12} />{credits}</span>
           </>}
-          {account.stale && <Clock3 size={11} className="limit-badge-muted" />}
+          {account.stale && <Clock3 size={11} className={hasIssue ? 'limit-badge-warning' : 'limit-badge-muted'} />}
         </span>}
       </span>
     </button>
@@ -579,7 +743,7 @@ export function LimitDetails({ id, account, provider, now, redeeming, creditButt
         {resetAt && <Detail label="重置时间"><time dateTime={account.resetsAt}>{resetAt}</time></Detail>}
         {timeLeft !== null && <Detail label="匀速进度">此时应剩余 {Math.round(timeLeft)}%</Detail>}
         {recovery > 0 && <Detail label="恢复">+{Math.round(recovery)}%（按共享池总额度计算）</Detail>}
-        {account.stale && <Detail label="缓存数据">
+        {account.stale && <Detail label="刷新时间">
           {checkedAt ? <time dateTime={account.checkedAt}>{checkedAt}</time> : '时间未知'}
         </Detail>}
         {account.plan && <Detail label="套餐">{account.plan}</Detail>}

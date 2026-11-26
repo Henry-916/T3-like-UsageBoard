@@ -1,16 +1,27 @@
 import { ArrowUpRight, LoaderCircle, RotateCw, Ticket } from 'lucide-react'
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
 import type { UsageProviderKind } from '../../shared/types'
 import { useLimitsData } from '../hooks/useLimitsData'
 import { limitTimeLeft } from '../limitsPresentation'
-import { trayGroups, trayQuotaTooltip, trayResetTime, trayWindowLabel } from '../trayPresentation'
+import {
+  trayCreditTooltip, trayGroups, trayPercentTooltip, trayQuotaTooltip, trayResetTime, trayResetTooltip, trayWindowLabel
+} from '../trayPresentation'
 import { providerInfo } from '../usagePresentation'
 import { accountSwitchErrorMessage } from './AccountsDialog'
 import { ProviderMark } from './ProviderMark'
 import '../styles/tray-panel.css'
 
 type ConfirmTarget = { accountId: string; displayName: string; provider: UsageProviderKind }
-type Tooltip = { key: string; text: string; below: boolean }
+type Tooltip = {
+  key: string
+  text: string
+  relTop: number
+  relBottom: number
+  panelHeight: number
+  anchorCenter: number
+  below: boolean
+  left?: number
+}
 
 export function TrayPanel() {
   const { report, loading, refreshing, failed, refresh } = useLimitsData()
@@ -22,6 +33,8 @@ export function TrayPanel() {
   const [confirming, setConfirming] = useState<ConfirmTarget | null>(null)
   const [switching, setSwitching] = useState<string | null>(null)
   const [switchError, setSwitchError] = useState('')
+  const panelRef = useRef<HTMLElement>(null)
+  const tipRef = useRef<HTMLSpanElement>(null)
   const list = useRef<HTMLDivElement>(null)
   const content = useRef<HTMLDivElement>(null)
   const footer = useRef<HTMLElement>(null)
@@ -95,18 +108,57 @@ export function TrayPanel() {
     return () => observer.disconnect()
   }, [])
 
+  useLayoutEffect(() => {
+    if (!tooltip || !panelRef.current || !tipRef.current) return
+    const panelWidth = panelRef.current.getBoundingClientRect().width
+    const tipWidth = tipRef.current.offsetWidth
+    const left = Math.round(Math.min(
+      Math.max(8, tooltip.anchorCenter - tipWidth / 2),
+      Math.max(8, panelWidth - tipWidth - 8)
+    ))
+    if (tooltip.left !== left) {
+      setTooltip(current => current && current.key === tooltip.key ? { ...current, left } : current)
+    }
+  }, [tooltip])
+
   const groups = useMemo(() => hidden === null ? [] : trayGroups(report?.accounts ?? [], new Set(hidden), now),
     [report?.accounts, hidden, now])
   const pending = loading || hidden === null
   const readFailed = failed || (!groups.length && hidden !== null &&
     report?.issues?.some(issue => !hidden.includes(issue.provider)))
 
-  function showTooltip(key: string, text: string | null, row: HTMLElement) {
-    if (!text) {
+  function showTooltip(
+    key: string,
+    text: string | null,
+    event: PointerEvent<HTMLElement>,
+    onlyIfTruncated = false
+  ) {
+    if (event.pointerType === 'touch' || !text) {
       setTooltip(null)
       return
     }
-    setTooltip({ key, text, below: row.getBoundingClientRect().top < 48 })
+    const target = event.currentTarget
+    if (onlyIfTruncated && target.scrollWidth <= target.clientWidth) {
+      setTooltip(null)
+      return
+    }
+    const panelRect = panelRef.current?.getBoundingClientRect()
+    if (!panelRect) return
+    const rect = target.getBoundingClientRect()
+    const relTop = rect.top - panelRect.top
+    setTooltip({
+      key,
+      text,
+      relTop,
+      relBottom: rect.bottom - panelRect.top,
+      panelHeight: panelRect.height,
+      anchorCenter: (rect.left + rect.right) / 2 - panelRect.left,
+      below: relTop < 32
+    })
+  }
+
+  function hideTooltip(key: string) {
+    setTooltip(current => current?.key === key ? null : current)
   }
 
   async function confirmSwitch() {
@@ -125,8 +177,10 @@ export function TrayPanel() {
   }
 
   return (
-    <section className="tray-panel" role="dialog" aria-label="托盘额度">
-      <div className="tray-scroll" ref={list} tabIndex={canScroll ? 0 : undefined} role="region" aria-label="账号额度">
+    <section ref={panelRef} className="tray-panel" role="dialog" aria-label="托盘额度"
+      onPointerLeave={() => setTooltip(null)}>
+      <div className="tray-scroll" ref={list} tabIndex={canScroll ? 0 : undefined} role="region" aria-label="账号额度"
+        onScroll={() => setTooltip(null)}>
         <div className="tray-content" ref={content}>
           {openFailed && <p className="tray-notice" role="alert">无法打开主面板。</p>}
           {groups.length === 0 && (
@@ -142,14 +196,25 @@ export function TrayPanel() {
                 const switchable = !account.current && account.canSwitch && (provider === 'codex' || provider === 'antigravity')
                 const credits = provider === 'codex' ? account.resetCredits ?? 0 : 0
                 const confirmingHere = confirming?.accountId === account.id
+                const emailTipKey = `email:${account.id}`
+                const creditTipKey = `credit:${account.id}`
+                const creditTip = trayCreditTooltip(credits)
                 return (
                   <article className="tray-account" key={account.id}>
                     <h3 className="tray-account-heading">
-                      <span className="tray-ellipsis" title={account.displayName}>{account.displayName}</span>
+                      <span className="tray-ellipsis"
+                        onPointerEnter={event => showTooltip(emailTipKey, account.displayName, event, true)}
+                        onPointerLeave={() => hideTooltip(emailTipKey)}>
+                        {account.displayName}
+                      </span>
                       <span className="tray-account-meta">
-                        {credits > 0 && <span className="tray-credit" title="可在主面板使用重置券">
-                          <Ticket size={11} aria-hidden="true" />{credits}
-                        </span>}
+                        {creditTip && (
+                          <span className="tray-credit"
+                            onPointerEnter={event => showTooltip(creditTipKey, creditTip, event)}
+                            onPointerLeave={() => hideTooltip(creditTipKey)}>
+                            <Ticket size={11} aria-hidden="true" />{credits}
+                          </span>
+                        )}
                         {account.current ? <span className="account-current-badge">当前</span>
                           : switchable ? <button type="button" className="tray-switch" disabled={switching !== null}
                             aria-expanded={confirmingHere} onClick={() => {
@@ -178,30 +243,46 @@ export function TrayPanel() {
                       {windows.map(({ window, reading }, index) => {
                         const tick = limitTimeLeft(reading, now)
                         const reset = trayResetTime(reading.resetsAt, now)
+                        const resetTip = trayResetTooltip(reading.resetsAt, now)
+                        const shortLabel = trayWindowLabel(window)
                         const key = `${account.id}:${window.windowId}:${index}`
-                        const tip = trayQuotaTooltip(reading, now, tick)
-                        const show = tooltip?.key === key
+                        const labelKey = `${key}:label`
+                        const trackKey = `${key}:track`
+                        const percentKey = `${key}:percent`
+                        const resetKey = `${key}:reset`
+                        const trackTip = trayQuotaTooltip(reading, now, tick)
+                        const percentTip = trayPercentTooltip(reading)
                         return (
-                          <li className="tray-quota" key={key} tabIndex={tip ? 0 : undefined}
-                            aria-label={tip ?? undefined}
-                            onPointerEnter={event => showTooltip(key, tip, event.currentTarget)}
-                            onPointerLeave={() => setTooltip(current => current?.key === key ? null : current)}
-                            onFocus={event => showTooltip(key, tip, event.currentTarget)}
-                            onBlur={() => setTooltip(current => current?.key === key ? null : current)}>
-                            <span className="tray-ellipsis tray-quota-label" title={window.label}>{trayWindowLabel(window)}</span>
-                            <span className="tray-track" aria-hidden="true" style={{
+                          <li className="tray-quota" key={key}>
+                            <span className="tray-ellipsis tray-quota-label"
+                              onPointerEnter={event => showTooltip(labelKey, window.label, event, shortLabel === window.label)}
+                              onPointerLeave={() => hideTooltip(labelKey)}>
+                              {shortLabel === window.label ? shortLabel : <>
+                                <span className="sr-only">{window.label}</span>
+                                <span aria-hidden="true">{shortLabel}</span>
+                              </>}
+                            </span>
+                            <span className="tray-track" style={{
                               '--tray-remaining': `${reading.remainingPercent}%`,
                               '--limit-tick-at': tick === null ? undefined : `clamp(3px, ${tick}%, calc(100% - 3px))`
-                            } as CSSProperties}>
+                            } as CSSProperties}
+                              onPointerEnter={event => showTooltip(trackKey, trackTip, event)}
+                              onPointerLeave={() => hideTooltip(trackKey)}>
+                              <span className="sr-only">{trackTip}</span>
                               {tick !== null && <span className="tray-tick" />}
                             </span>
-                            <strong className="tray-percent" title={reading.stale ? '缓存数据' : undefined}>
+                            <strong className="tray-percent"
+                              onPointerEnter={event => showTooltip(percentKey, percentTip, event)}
+                              onPointerLeave={() => hideTooltip(percentKey)}>
                               {Math.round(reading.remainingPercent)}%
                             </strong>
                             {reset
-                              ? <time className="tray-reset" dateTime={reading.resetsAt} title={reset}>{reset}</time>
+                              ? <time className="tray-reset" dateTime={reading.resetsAt}
+                                  onPointerEnter={resetTip ? event => showTooltip(resetKey, resetTip, event) : undefined}
+                                  onPointerLeave={resetTip ? () => hideTooltip(resetKey) : undefined}>
+                                  {reset}
+                                </time>
                               : <span className="tray-reset" aria-hidden="true" />}
-                            {show && tip && <span className="tray-tip" data-placement={tooltip.below ? 'below' : 'above'} role="tooltip">{tip}</span>}
                           </li>
                         )
                       })}
@@ -226,6 +307,19 @@ export function TrayPanel() {
           void window.usageApi.trayOpenMain().catch(() => setOpenFailed(true))
         }}>打开主面板<ArrowUpRight size={14} aria-hidden="true" /></button>
       </footer>
+      {tooltip && (
+        <span ref={tipRef} className="tray-tip" role="tooltip"
+          data-placement={tooltip.below ? 'below' : 'above'}
+          style={{
+            left: tooltip.left ?? 8,
+            ...(tooltip.below
+              ? { top: Math.round(tooltip.relBottom + 4) }
+              : { bottom: Math.round(tooltip.panelHeight - tooltip.relTop + 4) }),
+            visibility: tooltip.left === undefined ? 'hidden' : 'visible'
+          }}>
+          {tooltip.text}
+        </span>
+      )}
     </section>
   )
 }

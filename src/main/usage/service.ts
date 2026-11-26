@@ -6,6 +6,7 @@ import { usageSummaryInputSchema } from '../../shared/types'
 import type { UsageProviderKind, UsageRecord, UsageSource, UsageSummary, UsageSummaryInput } from '../../shared/types'
 import { aggregateUsage, createUsageWindowFilter, mergeUsageCopies } from './aggregation'
 import { loadOpenCodePricing } from './opencodePricing'
+import { loadPricePresets } from './pricePresets'
 import { loadPricing } from './pricing'
 import { fileFingerprint, readScanCache, writeScanCache } from './scanCache'
 import { mergeAntigravityRecords, scanAntigravityDatabase } from './readers/antigravity'
@@ -207,9 +208,12 @@ export function createUsageService({ userData, fallbackRates, home, env, now = D
       })
       return {
         readAt: result.readAt, timeZone: query.timeZone, sinceDay: query.sinceDay, untilDay: query.untilDay,
-        buckets: aggregateUsage(records, query, result.pricing, config.priceOverrides, config.modelAliases, opencodePricing),
+        buckets: aggregateUsage(records, query, result.pricing, config.priceOverrides, opencodePricing),
         sources, pricing: result.pricing.status, scanDurationMs: result.elapsed
       }
+    },
+    getPricePresets() {
+      return loadPricePresets({ userData })
     }
   }
 }

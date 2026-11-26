@@ -128,7 +128,7 @@ function App() {
         if (key === 'r' && !activeRefreshing) {
           event.preventDefault()
           void refreshActive()
-        } else if (key === 'c' || key === 't' || key === 'l') {
+        } else if (key === 'c' || key === 't' || key === 'a') {
           event.preventDefault()
           selectView(key === 'c' ? 'cost' : key === 't' ? 'tokens' : 'limits')
         }
@@ -158,7 +158,8 @@ function App() {
             </div>
           )}
           {view === 'limits' ? <LimitsView report={limits.report} hiddenProviders={hiddenProviderSet} loading={limits.loading}
-            refreshing={limits.refreshing} failed={limits.failed} onRefresh={limits.refresh} onReport={limits.applyReport} /> :
+            refreshing={limits.refreshing} failed={limits.failed} onRefresh={limits.refresh} onReport={limits.applyReport}
+            onOpenAccounts={() => setModal({ kind: 'accounts' })} /> :
             summary && query ? <CostTokenView summary={summary} query={query} metric={metric} hiddenProviders={hiddenProviderSet}
               pending={pending} onModel={(model) => setModal({ kind: 'model', model })} /> :
               pending ? <UsageSkeleton /> : null}

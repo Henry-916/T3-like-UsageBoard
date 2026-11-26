@@ -116,8 +116,10 @@ describe('renderer login session', () => {
   it('only allows known localized login diagnostics', () => {
     expect(loginFailureMessage({ ...state('failed'), message: 'arbitrary upstream text' })).toBe('未能完成登录，请重试。')
     expect(loginFailureMessage({ ...state('failed'), message: '登录已超时，请重试。' })).toBe('登录已超时，请重试。')
-    const missing = '未检测到 Antigravity CLI（agy），请先安装 Antigravity 后再登录。'
+    const missing = '未检测到 Antigravity CLI（agy），请先安装 Antigravity CLI 后再登录。'
     expect(loginFailureMessage({ ...state('failed'), message: missing })).toBe(missing)
+    const missingClaude = '未检测到 Claude Code CLI（claude），请先安装 Claude Code CLI 后再登录。'
+    expect(loginFailureMessage({ ...state('failed'), provider: 'claude', message: missingClaude })).toBe(missingClaude)
   })
 })
 

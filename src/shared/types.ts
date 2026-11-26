@@ -139,14 +139,31 @@ export const priceOverridesSchema = z.record(text, z.object({
   cacheReadCostPerMillionTokens: price.optional(),
   cacheWriteCostPerMillionTokens: price.optional()
 }))
-export const modelAliasesSchema = z.record(text, text)
 export type PriceOverrides = Readonly<z.infer<typeof priceOverridesSchema>>
-export type ModelAliases = Readonly<z.infer<typeof modelAliasesSchema>>
 export const pricingSettingsSchema = z.object({
-  priceOverrides: priceOverridesSchema,
-  modelAliases: modelAliasesSchema
+  priceOverrides: priceOverridesSchema
 })
 export type PricingSettings = z.infer<typeof pricingSettingsSchema>
+export type PricePresetSource = 'models.dev'
+export interface PricePreset {
+  id: string
+  modelId: string
+  label: string
+  providerId?: string
+  providerLabel: string
+  providerRank?: number
+  canonicalId?: string
+  isCanonicalOwner?: boolean
+  popularity?: number
+  primary?: boolean
+  derived?: boolean
+  source: PricePresetSource
+  aliases?: string[]
+  inputCostPerMillionTokens: number
+  outputCostPerMillionTokens: number
+  cacheReadCostPerMillionTokens?: number
+  cacheWriteCostPerMillionTokens?: number
+}
 export const uiPreferencesSchema = z.object({
   tab: z.enum(['cost', 'tokens', 'limits']).optional(),
   window: z.enum(['24h', '7d', '30d', '90d']).optional(),
