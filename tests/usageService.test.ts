@@ -142,7 +142,6 @@ test('scans disabled native Antigravity history but skips disabled manual direct
       } finally { db.close() }
     }
     const config = await readConfig(userData)
-    config.scanT3 = false
     config.accounts = [{ id: 'manual', provider: 'antigravity', displayName: 'Manual', dataDir: manual }]
     const options = { home, env: {}, userData, fallbackRates: resolve('resources/fallback-rates.json') }
     const discovered = await discoverAccounts(config, options)

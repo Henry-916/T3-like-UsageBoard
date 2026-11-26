@@ -24,6 +24,10 @@ describe('usage chart columns', () => {
       resolution: 'hour', sinceDay: '2026-10-31', untilDay: '2026-11-01', timeZone: 'America/New_York',
       sinceTime: '2026-10-31T23:30:15-04:00', untilTime: '2026-11-01T02:30:15-05:00'
     }
+    const priced = { ...pricing, rates: new Map([['test', {
+      standard: { input: 0.000123, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0 },
+      fast: null, ultrafast: null, tiers: []
+    }]]) }
     const buckets = aggregateUsage([
       record('2026-11-01T03:30:14.999Z'),
       record('2026-11-01T03:30:15Z'),
@@ -31,7 +35,7 @@ describe('usage chart columns', () => {
       record('2026-11-01T05:45:00Z', { provider: 'claude' }),
       record('2026-11-01T06:45:00Z'),
       record('2026-11-01T07:30:15Z')
-    ], query, pricing, {}, {})
+    ], query, priced, {}, {})
     expect(buckets.slice(0, 2).map(({ day }) => day)).toEqual(['2026-10-31', '2026-11-01'])
     const { columns, providers } = buildUsageChartColumns(buckets, query, 'tokens')
     expect(providers.map(({ id }) => id)).toEqual(['codex', 'claude'])
@@ -46,7 +50,7 @@ describe('usage chart columns', () => {
       buckets.reduce((sum, row) => sum + totalTokens(row.totals), 0)
     )
     const cost = buildUsageChartColumns(buckets, query, 'cost').columns
-    expect(cost[0].values.codex).toBeCloseTo(0.00246, 10)
+    expect(cost[0].values.codex).toBeCloseTo(0.00123, 10)
     expect(cost.reduce((sum, col) => sum + col.total, 0)).toBeCloseTo(
       buckets.reduce((sum, row) => sum + row.costUsd, 0), 10
     )
@@ -113,9 +117,13 @@ describe('usage chart tooltip positioning', () => {
 describe('usage chart axes', () => {
   it('uses full USD amounts and short Chinese dates for daily data', () => {
     const query = { sinceDay: '2026-11-18', untilDay: '2026-11-24', timeZone: 'UTC' }
+    const priced = { ...pricing, rates: new Map([['test', {
+      standard: { input: 0, output: 85 / 620_000_000, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0 },
+      fast: null, ultrafast: null, tiers: []
+    }]]) }
     const buckets = aggregateUsage([
       record('2026-11-18T12:00:00Z', { reportedCostUsd: 85, totals: { ...EMPTY_TOTALS, outputTokens: 620_000_000 } })
-    ], query, pricing, {}, {})
+    ], query, priced, {}, {})
     const cost = renderToStaticMarkup(createElement(UsageProviderChart, { buckets, query, metric: 'cost' }))
     expect(cost).toContain('US$100.00')
     expect(cost).toContain('US$50.00')

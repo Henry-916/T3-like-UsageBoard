@@ -133,15 +133,6 @@ export function AccountsDialog({ onClose, onChanged, updates }: {
     <UsageDialog title="账号管理" onClose={() => void closeDialog()} busy={busy}>
       <div className="dialog-body accounts-body" aria-busy={loading || busy}>
         <div className="accounts-toolbar">
-          <label className="account-toggle">
-            <input type="checkbox" role="switch" aria-label="扫描 T3 账号" checked={report?.scanT3 ?? true}
-              disabled={!report || locked || showAdd}
-              onChange={(event) => {
-                const enabled = event.currentTarget.checked
-                void mutate(() => window.usageApi.setScanT3(enabled), '无法更新 T3 扫描设置。')
-              }} />
-            扫描 T3 账号
-          </label>
           <button ref={addTrigger} className="action-button" type="button" aria-expanded={showAdd}
             disabled={!report || locked} onClick={() => {
               if (showAdd) void closeAdd()

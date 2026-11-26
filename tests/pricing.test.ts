@@ -14,6 +14,10 @@ const document = {
     provider_specific_entry: { fast: 2 },
   },
   "reseller/claude-test": { input_cost_per_token: 9, output_cost_per_token: 9 },
+  "free/model": {
+    input_cost_per_token: 0, output_cost_per_token: 0,
+    cache_read_input_token_cost: 0, cache_creation_input_token_cost: 0,
+  },
   incomplete: { input_cost_per_token: 1 },
 };
 const table = parseRateTable(document);
@@ -52,8 +56,17 @@ describe("priceUsage", () => {
     expect(reported).toMatchObject({ costUsd: 0.5, costSource: "providerReported" });
     expect(Object.values(reported.categoryCostUsd!).reduce((sum, part) => sum + part, 0)).toBeCloseTo(0.5);
     expect(priceUsage(table, { ...record, model: "unknown", reportedCostUsd: 0 }, overrides))
-      .toMatchObject({ costUsd: 0, categoryCostUsd: null, costSource: "providerReported" });
+      .toMatchObject({ costUsd: 0, costSource: "providerReported",
+        categoryCostUsd: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
+    expect(priceUsage(table, { ...record, model: "unknown", reportedCostUsd: 0.75 }, overrides)).toEqual({
+      costUsd: 0, costSource: "unpriced", categoryCostUsd: null, speedPremiumUsd: 0, cacheSavingsUsd: 0,
+    });
     expect(priceUsage(table, { ...record, model: "unknown" }, overrides)).toMatchObject({ costSource: "unpriced" });
+    // A zero-priced rate cannot split a positive lump-sum report; do not trust it.
+    expect(priceUsage(table, { ...record, model: "free/model", reportedCostUsd: 2 }, overrides)).toMatchObject({
+      costUsd: 0, costSource: "modelPriced",
+      categoryCostUsd: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
   });
 });
 

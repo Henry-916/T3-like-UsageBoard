@@ -35,7 +35,7 @@ async function fixture(overrides: Partial<Parameters<typeof createAccountLoginMa
   const onUpdate = vi.fn()
   // Supply the legacy callback as a tripwire for browser-launch regressions.
   const manager = createAccountLoginManager({
-    userData, tempDirectory: root, getScanT3: () => true, ...{ openExternal }, onUpdate,
+    userData, tempDirectory: root, ...{ openExternal }, onUpdate,
     spawnProcess, resolveCli: resolveExecutable, resolveAgyCli: resolveExecutable, terminateProcess, commitAccount, ...overrides
   })
   managers.push(manager)
@@ -55,7 +55,7 @@ describe('login external URLs', () => {
 
 describe('mock account login', () => {
   it('isolates Antigravity login, validates code and hands credentials to the encrypted commit boundary', async () => {
-    const f = await fixture({ getScanT3: async () => true })
+    const f = await fixture()
     const { flowId } = await f.manager.start({ provider: 'antigravity' })
     const [, args, cwd, env] = f.spawnProcess.mock.calls[0]
     expect(args).toContain('--login')

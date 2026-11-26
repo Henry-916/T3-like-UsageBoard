@@ -60,7 +60,17 @@ describe('poolUsageLimits', () => {
         { accountId: 'b', recoveryPercent: 20 }
       ]
     })
-    expect(pool.accounts[0]).toMatchObject({ id: 'c', remainingPercent: 85, recoveryPercent: 5 })
+    expect(pool.accounts.map((member) => member.id)).toEqual(['a', 'b', 'c'])
+    expect(pool.accounts.find((member) => member.id === 'c')).toMatchObject({ remainingPercent: 85, recoveryPercent: 5 })
+  })
+
+  it('puts the current account first and passes its switch metadata through', () => {
+    const current = { ...account('z', 40, firstReset), current: true, canSwitch: false }
+    const switchable = { ...account('a', 20, firstReset), canSwitch: true }
+    const [pool] = poolUsageLimits([switchable, current], nowMs)
+    expect(pool.accounts.map((member) => member.id)).toEqual(['z', 'a'])
+    expect(pool.accounts[0]).toMatchObject({ current: true, canSwitch: false })
+    expect(pool.accounts[1]).toMatchObject({ current: undefined, canSwitch: true })
   })
 
   it.each([

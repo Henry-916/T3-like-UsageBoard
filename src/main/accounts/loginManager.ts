@@ -16,7 +16,6 @@ type Provider = StartAccountLoginInput['provider']
 type Credential = { filename: string; text: string }
 interface LoginOptions {
   userData: string
-  getScanT3(): boolean | Promise<boolean>
   onUpdate(state: AccountLoginState): void
   commitAccount(account: { id: string; provider: Provider; displayName?: string; dataDir?: string }, credential?: Credential): Promise<void>
   version?: string
@@ -217,9 +216,7 @@ export function createAccountLoginManager(options: LoginOptions) {
       const [label, command] = providers[provider]
       let executable: string | undefined
       if (provider === 'antigravity') {
-        const scanT3 = await options.getScanT3()
-        signal.throwIfAborted()
-        executable = await (options.resolveAgyCli ?? resolveAgyCli)({ scanT3 })
+        executable = await (options.resolveAgyCli ?? resolveAgyCli)()
       } else {
         executable = await (options.resolveCli ?? resolveCli)(provider)
       }

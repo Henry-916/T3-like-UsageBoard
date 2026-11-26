@@ -169,8 +169,7 @@ export interface DiscoveredAccount extends AccountConfig {
   credentialSource?: DiscoveredAccount
   switchSource?: DiscoveredAccount
   currentCredential?: Buffer
-  origin: 'native' | 't3' | 'manual'
+  origin: 'native' | 'manual'
   enabled: boolean
   credentialPaths?: string[]
-  limitsEnv?: { ANTIGRAVITY_AUTH_METHOD?: string }
 }

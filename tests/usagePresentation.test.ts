@@ -35,10 +35,11 @@ describe('usage overview presentation', () => {
       .toEqual({ buckets: [], sources: [], sessions: 0 })
   })
 
-  it('shows cache writes without counting them as undistributed or keeping zero-value legend entries', () => {
+  it('shows cache writes with exactly four segments and no zero-value legend entries', () => {
     const segments = usageSegments(usageFigures([bucket()]), 'cost')
+    expect(segments).toHaveLength(4)
     expect(segments.find(({ label }) => label === '缓存写入')?.value).toBe(0.3)
-    expect(segments.find(({ label }) => label === '未拆分')?.value).toBe(0)
+    expect(segments.some(({ label }) => label === '未拆分')).toBe(false)
     const html = renderToStaticMarkup(createElement(UsageShareBar, { label: '按类型统计的费用', segments, metric: 'cost' }))
     expect(html).toContain('US$0.30')
     expect(html).toContain('缓存写入')
@@ -48,7 +49,7 @@ describe('usage overview presentation', () => {
     expect(html).not.toContain('US$0.00')
   })
 
-  it('keeps cost and token categories in the same order and hatches only undistributed costs', () => {
+  it('keeps cost and token categories in the same four-segment order', () => {
     const values = usageFigures([bucket({
       costUsd: 1,
       categoryCostUsd: { input: 0.1, cacheRead: 0.2, cacheWrite: 0.3, output: 0.15 },
@@ -56,21 +57,19 @@ describe('usage overview presentation', () => {
     })])
     const cost = usageSegments(values, 'cost')
     const tokens = usageSegments(values, 'tokens')
-    expect(cost.map(({ label, value, pattern }) => `${label}: ${value}${pattern ? ` (${pattern})` : ''}`).join('\n'))
-      .toMatchInlineSnapshot(`
-        "输入: 0.1
-        缓存读取: 0.2
-        缓存写入: 0.3
-        输出: 0.15
-        未拆分: 0.25 (hatch)"
-      `)
+    expect(cost.map(({ label, value }) => `${label}: ${value}`).join('\n')).toMatchInlineSnapshot(`
+      "输入: 0.1
+      缓存输入: 0.2
+      缓存写入: 0.3
+      输出: 0.15"
+    `)
     expect(tokens.map(({ label, value }) => `${label}: ${value}`).join('\n')).toMatchInlineSnapshot(`
       "输入: 30
-      缓存读取: 20
+      缓存输入: 20
       缓存写入: 10
       输出: 40"
     `)
-    expect(tokens.map(({ color }) => color)).toEqual(cost.slice(0, 4).map(({ color }) => color))
+    expect(tokens.map(({ color }) => color)).toEqual(cost.map(({ color }) => color))
     expect(tokens.map(({ color }) => color)).toEqual([
       'color-mix(in srgb, var(--color-ink) 70%, var(--color-canvas))',
       'color-mix(in srgb, var(--color-ink) 25%, var(--color-canvas))',
@@ -78,9 +77,8 @@ describe('usage overview presentation', () => {
       '#f4f4f5'
     ])
     const costHtml = renderToStaticMarkup(createElement(UsageShareBar, { label: '按类型统计的费用', segments: cost, metric: 'cost' }))
-    expect(costHtml.match(/data-pattern="hatch"/g)).toHaveLength(2)
-    expect(costHtml).toMatch(/data-pattern="hatch"[^>]+title="未拆分 · US\$0\.25 · 25\.0%"/)
-    expect(costHtml).toContain('class="share-swatch" data-pattern="hatch"')
+    expect(costHtml).not.toMatch(/data-pattern|未拆分|hatch/)
+    expect(costHtml).toContain('title="缓存输入 · US$0.20 · 26.7%"')
     const tokensHtml = renderToStaticMarkup(createElement(UsageShareBar, { label: '按类型统计的 token', segments: tokens, metric: 'tokens' }))
     expect(tokensHtml).not.toMatch(/data-pattern|未拆分|输入框/)
   })

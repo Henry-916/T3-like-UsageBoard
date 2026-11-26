@@ -55,10 +55,6 @@
 .usage-overview .overview-share { max-width: calc((100% - 44px) / 2); }
 .share-section .share-bar { background: var(--color-canvas); }
 .share-section .share-bar > span { min-width: 4px; border-radius: 0; }
-.share-section :is(.share-bar > span, .share-swatch)[data-pattern="hatch"] {
-  background: #111111 repeating-linear-gradient(135deg, transparent 0 1px, rgb(255 255 255 / 0.12) 1px 2px, transparent 2px 50%);
-  background-size: 7px 7px;
-}
 
 .usage-overview .breakdown-table tbody tr { border-bottom-color: var(--color-row-divider, rgb(255 255 255 / 0.05)); }
 .usage-overview .breakdown-table :is(td, th) { padding-inline: 8px; }

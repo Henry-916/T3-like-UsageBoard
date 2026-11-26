@@ -1,6 +1,6 @@
 {
   "name": "t3-like-usageboard",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "description": "T3-like UsageBoard：独立的 Windows AI 用量与额度看板",
   "license": "MIT",

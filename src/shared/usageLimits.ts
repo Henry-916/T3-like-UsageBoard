@@ -2,6 +2,8 @@ import type { LimitAccountReading, LimitWindow } from './limitsTypes'
 
 export interface PooledLimitAccount {
   id: string
+  current?: boolean
+  canSwitch?: boolean
   displayName: string
   origin: LimitAccountReading['origin']
   plan?: string
@@ -116,9 +118,9 @@ export function poolUsageLimits(
         timedUsed += used
         timedElapsed += clampPercent(100 * (1 - (at - nowMs) / duration))
       }
-      const { id, displayName, origin, plan, checkedAt, stale, resetCredits, resetCreditsExpiresAt, nextResetCreditId } = account
+      const { id, displayName, origin, plan, checkedAt, stale, resetCredits, resetCreditsExpiresAt, nextResetCreditId, current, canSwitch } = account
       return {
-        id, displayName, origin, plan, checkedAt, stale, resetCredits, resetCreditsExpiresAt, nextResetCreditId,
+        id, current, canSwitch, displayName, origin, plan, checkedAt, stale, resetCredits, resetCreditsExpiresAt, nextResetCreditId,
         remainingPercent: 100 - used,
         capacitySharePercent: share * 100,
         resetsAt: resetStatus === 'unknown' ? undefined : window.resetsAt,
@@ -129,6 +131,9 @@ export function poolUsageLimits(
       }
     })
     resets.sort((a, b) => a.at - b.at)
+    pooledAccounts.sort((a, b) =>
+      Number(Boolean(b.current)) - Number(Boolean(a.current)) ||
+      a.displayName.localeCompare(b.displayName, 'zh-CN') || a.id.localeCompare(b.id))
     const next = resets[0]
     const shares = next && resets
       .filter((reset) => reset.at - next.at < MINUTE)

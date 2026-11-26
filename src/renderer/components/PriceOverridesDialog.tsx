@@ -6,7 +6,7 @@ import { UsageDialog } from './UsageDialog'
 const priceFields = [
   ['inputCostPerMillionTokens', '输入'],
   ['outputCostPerMillionTokens', '输出'],
-  ['cacheReadCostPerMillionTokens', '缓存读取'],
+  ['cacheReadCostPerMillionTokens', '缓存输入'],
   ['cacheWriteCostPerMillionTokens', '缓存写入']
 ] as const
 type PriceKey = (typeof priceFields)[number][0]

@@ -15,7 +15,6 @@ import { createUpdater } from './updater'
 import { createLimitsService } from './limits/service'
 import { createAntigravityProbe, waitForAntigravityRenewals } from './limits/probes/antigravity'
 import { antigravityTokenKey, createAntigravityTokenCache } from './limits/antigravityTokenCache'
-import { readConfig } from './configStore'
 import { probeClaude } from './limits/probes/claude'
 import { probeCodex } from './limits/probes/codex'
 import { createCodexResetCreditConsumer } from './limits/codexResetCredit'
@@ -147,7 +146,6 @@ if (!app.requestSingleInstanceLock()) {
     })
     const antigravity = createAntigravityProbe({
       tokenCache,
-      getScanT3: async () => (await readConfig(userData)).scanT3,
       readCurrentCredential: readAntigravityCredential,
       compareAndWriteCurrentCredential: compareAndWriteAntigravityCredential
     })
@@ -208,7 +206,6 @@ if (!app.requestSingleInstanceLock()) {
     }
     const login = createAccountLoginManager({
       userData,
-      getScanT3: async () => (await readConfig(userData)).scanT3,
       onUpdate: state => {
         if (panel && !panel.webContents.isDestroyed()) panel.webContents.send(usageChannels.accountLoginUpdated, state)
       },

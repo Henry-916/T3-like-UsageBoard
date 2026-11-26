@@ -16,7 +16,7 @@ const entry = z.object({
   identity: z.string().min(1),
   data: z.object({
     id: z.string().min(1), provider: providerSchema, displayName: z.string(),
-    origin: z.enum(['native', 't3', 'manual']), plan: z.string().optional(),
+    origin: z.enum(['native', 'manual']), plan: z.string().optional(),
     windows: windows.min(1), checkedAt: timestamp, resetCredits: z.number().optional(),
     resetCreditsExpiresAt: timestamp.optional(), nextResetCreditId: z.string().min(1).optional(),
     previous: z.object({ checkedAt: timestamp, windows }).optional()

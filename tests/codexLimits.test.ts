@@ -86,8 +86,8 @@ describe('Codex usage probe', () => {
     expect(await probeCodex(account, ctx)).toMatchObject({ kind: 'ok', plan: 'ChatGPT Plus Subscription',
       resetCredits: 2, nextResetCreditId: 'first', resetCreditsExpiresAt: '2998-01-01T00:00:00.000Z',
       fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/), windows: [
-        { id: 'primary', kind: 'session', windowDurationMins: 300, usedPercent: 32, resetsAt: '2030-03-17T17:46:40.000Z' },
-        { id: 'secondary', kind: 'weekly', windowDurationMins: 10080, usedPercent: 100 }
+        { id: 'primary', kind: 'session', label: '5-Hour', windowDurationMins: 300, usedPercent: 32, resetsAt: '2030-03-17T17:46:40.000Z' },
+        { id: 'secondary', kind: 'weekly', label: 'Weekly', windowDurationMins: 10080, usedPercent: 100 }
       ] })
     const [first, second] = ctx.fetch.mock.calls
     expect(first[0]).toBe('https://chatgpt.com/backend-api/wham/usage')
@@ -142,10 +142,9 @@ describe('Codex usage probe', () => {
     expect(mocks.spawn).not.toHaveBeenCalled()
   })
 
-  it('does not launch the CLI for T3 or a manually selected alias into T3', async () => {
+  it('does not launch the CLI for an account pointing into ~/.t3', async () => {
     const ctx = requestContext()
     ctx.fetch.mockImplementation(async () => new Response(null, { status: 401 }))
-    expect(await probeCodex({ ...account, origin: 't3' }, ctx)).toEqual({ kind: 'failed' })
     mocks.realpath.mockImplementation(async (path: string) => path === home
       ? join(homedir(), '.t3', 'userdata', 'codex') : path)
     expect(await probeCodex({ ...account, origin: 'manual' }, ctx)).toEqual({ kind: 'failed' })

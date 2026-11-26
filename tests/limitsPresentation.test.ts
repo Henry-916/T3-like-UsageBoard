@@ -9,7 +9,7 @@ import type { LimitAccountIssue, LimitsReport } from '../src/shared/limitsTypes'
 import type { UsageProviderKind } from '../src/shared/types'
 
 const expired: LimitAccountIssue = {
-  id: 'agy-1', provider: 'antigravity', displayName: '工作账号', origin: 't3',
+  id: 'agy-1', provider: 'antigravity', displayName: '工作账号', origin: 'native',
   reason: 'expired', cached: false
 }
 const missingCli: LimitAccountIssue = {
@@ -155,9 +155,11 @@ describe('LimitsView segments', () => {
         { ...agy, id: 'agy-2', displayName: 'backup@example.com', windows: [{ ...window, usedPercent: 0 }] }
       ] } })
       expect(html.match(/popover="auto"/g)).toHaveLength(1)
-      expect(html.match(/class="limit-account-name"/g)).toHaveLength(3)
-      expect(html).toContain('class="limit-account-name" title="codex@example.com">codex@example.com')
-      expect(html).toContain('class="limit-account-name" title="work@example.com">work@example.com')
+      // Emails live in the header pills; the segment strips themselves stay clean.
+      expect(html.match(/class="limit-account-name"/g)).toBeNull()
+      expect(html.match(/class="limit-account-pill"/g)).toHaveLength(3)
+      expect(html).toContain('class="limit-pill-name">codex@example.com')
+      expect(html).toContain('class="limit-pill-name">work@example.com')
       expect(html.match(/class="limit-recovery"/g)).toHaveLength(1)
       expect(html.match(/class="limit-badge-credit"/g)).toHaveLength(1)
       expect(html).toContain('↻ 3 小时 19 分钟')
@@ -168,12 +170,24 @@ describe('LimitsView segments', () => {
     }
   })
 
+  it('renders a switchable pill and leaves an empty column for a missing quota window', () => {
+    const html = renderView({ report: { ...report, accounts: [
+      { ...agy, current: true, canSwitch: true, windows: [window, {
+        ...window, id: 'weekly', label: 'Weekly', kind: 'weekly', windowDurationMins: 10080
+      }] },
+      { ...agy, id: 'agy-2', displayName: 'backup@example.com', canSwitch: true, windows: [window] }
+    ] } })
+    expect(html.match(/data-switchable="true"/g)).toHaveLength(1)
+    expect(html).toContain('<button type="button" class="limit-account-pill" data-switchable="true" title="切换到 backup@example.com">')
+    expect(html.match(/<span class="limit-account-slot" aria-hidden="true"><\/span>/g)).toHaveLength(1)
+  })
+
   it('puts quota metrics directly after the email header, without a source row or divider', () => {
     const html = renderToStaticMarkup(createElement(LimitDetails, {
       id: 'details', provider: 'antigravity', now: fixedNow, redeeming: false,
       creditButton: createRef<HTMLButtonElement>(), onReset: vi.fn(),
       account: {
-        id: 'work', displayName: agy.displayName, origin: 't3', checkedAt: after(0), stale: false,
+        id: 'work', displayName: agy.displayName, origin: 'native', checkedAt: after(0), stale: false,
         capacitySharePercent: 50, remainingPercent: 55, recoveryPercent: 8, resetStatus: 'upcoming',
         resetsAt: window.resetsAt, windowDurationMins: window.windowDurationMins
       }

@@ -5,12 +5,66 @@
 
 .limits-view .limits-loading { display: grid; gap: 10px; }
 .limits-view .limits-provider { min-width: 0; display: grid; gap: 12px; }
+.limits-view .limits-provider-header {
+  display: grid;
+  grid-template-columns: 11rem minmax(0, 1fr);
+  align-items: center;
+  gap: 12px 24px;
+  padding-inline: 16px;
+}
 .limits-view .limits-provider-heading {
   display: flex;
   align-items: center;
   gap: 8px;
   margin: 0;
 }
+.limits-view .limit-account-pills { display: grid; min-width: 0; gap: 4px; }
+.limits-view .limit-account-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 26px;
+  padding-inline: 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-subtle);
+  font-size: 12px;
+  line-height: 1;
+  text-align: start;
+}
+.limits-view .limit-account-pill[data-current="true"] { color: var(--color-ink); }
+.limits-view .limit-pill-name {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.limits-view .limit-pill-current {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--control);
+  color: var(--color-ink);
+  font-size: 10px;
+}
+.limits-view .limit-account-pill[data-switchable="true"] { cursor: pointer; }
+.limits-view .limit-account-pill[data-switchable="true"]:is(:hover, :focus-visible) {
+  border-color: rgb(255 255 255 / 0.14);
+  background: var(--control);
+  color: var(--color-ink);
+  outline: none;
+}
+.limits-view .limit-pill-hint {
+  flex: none;
+  margin-inline-start: auto;
+  color: var(--color-subtle);
+  font-size: 10px;
+  opacity: 0;
+  transition: opacity .12s ease;
+}
+.limits-view .limit-account-pill[data-switchable="true"]:is(:hover, :focus-visible) .limit-pill-hint { opacity: 1; }
 .limits-view :is(.limits-provider-heading, .limit-window-label) {
   color: var(--color-ink);
   font-size: 14px;
@@ -124,12 +178,10 @@
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
-.limits-view .limit-account-name {
-  min-inline-size: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 500;
+.limits-view .limit-account-slot {
+  height: 32px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--control) 40%, transparent);
 }
 .limits-view .limit-account-percent { flex: none; font-weight: 600; }
 .limits-view .limit-badge {
@@ -146,10 +198,6 @@
   line-height: 1.25;
   white-space: nowrap;
   overflow: hidden;
-}
-.limits-view .limit-segment-content:has(.limit-account-name) .limit-badge {
-  flex-shrink: 0;
-  max-inline-size: 47%;
 }
 .limits-view .limit-badge-time { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .limits-view .limit-badge-muted { flex: none; color: var(--color-subtle); }
@@ -255,4 +303,5 @@
 
 @media (width < 700px) {
   .limits-view .limit-window { grid-template-columns: minmax(0, 1fr); }
+  .limits-view .limits-provider-header { grid-template-columns: minmax(0, 1fr); gap: 6px; padding-inline: 0; }
 }

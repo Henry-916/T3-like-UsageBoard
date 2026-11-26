@@ -1,21 +1,16 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { access, constants, lstat, open, readFile, readdir, realpath, stat } from 'node:fs/promises'
+import { access, constants, open, readdir, realpath, stat } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { z } from 'zod'
 import type { DiscoveredAccount } from '../../../shared/types'
 
 export function credentialCandidates(account: DiscoveredAccount): string[] {
-  const paths = account.credentialPaths ?? []
-  const dataDir = account.dataDir
-  if (account.origin !== 't3' || !dataDir) return paths
-  const key = (path: string) => process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path)
-  return paths.filter(path => key(dirname(path)) === key(dataDir))
+  return account.credentialPaths ?? []
 }
 
 export async function safeCliHome(account: DiscoveredAccount): Promise<string | undefined> {
-  if (account.origin === 't3' || !account.dataDir) return
+  if (!account.dataDir) return
   return safeCliDirectory(account.dataDir)
 }
 
@@ -179,22 +174,11 @@ export async function resolveWindowsCli(command: 'codex' | 'claude', env: NodeJS
 }
 
 export interface ResolveAgyOptions {
-  scanT3?: boolean
   home?: string
   env?: NodeJS.ProcessEnv
   platform?: NodeJS.Platform
   arch?: string
 }
-
-const releaseIdSchema = z.string().length(64).regex(/^[a-f0-9]{64}$/)
-const activeAgyRelease = z.object({ releaseId: releaseIdSchema })
-const installedAgyRelease = z.object({
-  releaseId: releaseIdSchema,
-  executable: z.object({
-    name: z.string(),
-    bytes: z.number().refine(bytes => Number.isSafeInteger(bytes) && bytes > 0)
-  })
-})
 
 function agyPathKey(path: string, windows: boolean) {
   return windows ? resolve(path).toLowerCase() : resolve(path)
@@ -205,49 +189,12 @@ function agyPathWithin(root: string, path: string, windows: boolean) {
   return child === '' || (child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child))
 }
 
-async function resolveManagedAgy(home: string, platform: NodeJS.Platform, arch: string) {
-  if (!/^[a-z0-9]+$/u.test(arch) || !/^[a-z0-9]+$/u.test(platform)) return
-  const windows = platform === 'win32'
-  const root = join(home, '.t3', 'userdata', 'tools', 'antigravity-acp', `${platform}-${arch}`)
-  const versions = join(root, 'versions')
-  const name = windows ? 'agy.exe' : 'antigravity'
-  // Check the full ancestry, not just the resolved leaf: even in-tree junctions are rejected.
-  async function plainEntry(path: string, directory: boolean) {
-    const entry = await lstat(path)
-    if (entry.isSymbolicLink() || !(directory ? entry.isDirectory() : entry.isFile()) ||
-        agyPathKey(await realpath(path), windows) !== agyPathKey(path, windows)) throw new Error()
-    return entry
-  }
-  async function readRecord(path: string): Promise<unknown> {
-    if ((await plainEntry(path, false)).size > 8192) throw new Error()
-    return JSON.parse(await readFile(path, 'utf8'))
-  }
-  try {
-    const ancestry = [root]
-    while (dirname(ancestry[0]) !== ancestry[0]) ancestry.unshift(dirname(ancestry[0]))
-    for (const dir of ancestry) await plainEntry(dir, true)
-    const { releaseId } = activeAgyRelease.parse(await readRecord(join(root, 'active.json')))
-    const release = join(versions, releaseId)
-    if (!agyPathWithin(versions, release, windows)) return
-    await plainEntry(versions, true)
-    await plainEntry(release, true)
-    const installed = installedAgyRelease.parse(await readRecord(join(release, '.install-complete.json')))
-    if (installed.releaseId !== releaseId || installed.executable.name !== name) return
-    const executable = join(release, name)
-    if ((await plainEntry(executable, false)).size !== installed.executable.bytes) return
-    if (windows) {
-      if (!await hasPeHeader(executable)) return
-    } else await access(executable, constants.X_OK)
-    return executable
-  } catch { /* absent or invalid managed runtime */ }
-}
-
 export function resolveWindowsAgyCli(options: Omit<ResolveAgyOptions, 'platform'> = {}) {
   return resolveAgyCli({ ...options, platform: 'win32' })
 }
 
 export async function resolveAgyCli({
-  home = homedir(), env = process.env, platform = process.platform, arch = process.arch, scanT3
+  home = homedir(), env = process.env, platform = process.platform
 }: ResolveAgyOptions = {}): Promise<string | undefined> {
   if (!isAbsolute(home)) return
   const windows = platform === 'win32'
@@ -292,7 +239,7 @@ export async function resolveAgyCli({
     if (installed) return installed
   }
   const installed = await external(join(home, '.local', 'bin', names[0]))
-  return installed ?? (scanT3 === false ? undefined : resolveManagedAgy(home, platform, arch))
+  return installed
 }
 
 type Exchange<T> = (frame: Record<string, unknown>, send: (frame: object) => void) => T | undefined

@@ -176,22 +176,30 @@ export function priceUsage(table: RateTable, record: PricedRecord, overrides?: R
   const rate = overrides?.get(keyFor(record.model)) ??
     (record.rateModel === undefined ? undefined : lookupRate(table, record.rateModel)) ??
     lookupRate(table, record.model);
-  const costSource = reported !== null ? "providerReported" : rate ? "modelPriced" : "unpriced";
   if (!rate) {
-    return { costUsd: reported ?? 0, costSource, categoryCostUsd: null, speedPremiumUsd: 0, cacheSavingsUsd: 0 };
+    // A provider total that cannot be split across token categories is not an estimate.
+    if (reported === 0) {
+      return { costUsd: 0, costSource: "providerReported",
+        categoryCostUsd: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        speedPremiumUsd: 0, cacheSavingsUsd: 0 };
+    }
+    return { costUsd: 0, costSource: "unpriced", categoryCostUsd: null, speedPremiumUsd: 0, cacheSavingsUsd: 0 };
   }
   const selected = ratesAt(rate, record.speed, record.totals);
   const costs = categoryCosts(record, selected);
   const sum = (c: UsageCategoryCost) => c.input + c.output + c.cacheRead + c.cacheWrite;
   const listCost = sum(costs);
   const cacheSavingsUsd = record.totals.cachedInputTokens * (selected.input - selected.cacheRead);
-  if (reported !== null && listCost <= 0) {
-    return { costUsd: reported, costSource, categoryCostUsd: null, speedPremiumUsd: 0, cacheSavingsUsd };
+  if (listCost <= 0) {
+    // A known free model stays at zero; a lump-sum report for a zero-priced rate is not trusted.
+    return { costUsd: 0, costSource: "modelPriced",
+      categoryCostUsd: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      speedPremiumUsd: 0, cacheSavingsUsd };
   }
   const scale = reported === null ? 1 : reported / listCost;
   return {
     costUsd: reported ?? listCost,
-    costSource,
+    costSource: reported === null ? "modelPriced" : "providerReported",
     categoryCostUsd: {
       input: costs.input * scale, output: costs.output * scale,
       cacheRead: costs.cacheRead * scale, cacheWrite: costs.cacheWrite * scale,

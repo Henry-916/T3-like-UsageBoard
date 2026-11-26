@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import { BrowserWindow, screen } from 'electron'
 import type { Point, Rectangle } from 'electron'
+import { usageChannels } from '../shared/ipc'
 import { hasTrayBounds, positionTrayPanel, trayPanelMaxHeight, trayPanelWidth } from './trayPanelPosition'
 
 interface Options {
@@ -17,6 +18,8 @@ export function createTrayPanel({ iconPath, rendererUrl, showMain }: Options) {
   let requested = false
   let ready = false
   let lastBlurAt = -Infinity
+  // Switching writes credentials and restarts the provider app, which may steal focus.
+  let switching = false
 
   function applyBounds(): void {
     const window = panel
@@ -81,7 +84,7 @@ export function createTrayPanel({ iconPath, rendererUrl, showMain }: Options) {
     screen.on('display-metrics-changed', applyBounds)
     screen.on('display-removed', applyBounds)
     window.on('blur', () => {
-      if (requested && window.isVisible()) {
+      if (!switching && requested && window.isVisible()) {
         lastBlurAt = performance.now()
         hide()
       }
@@ -102,7 +105,7 @@ export function createTrayPanel({ iconPath, rendererUrl, showMain }: Options) {
     window.webContents.on('before-input-event', (event, input) => {
       if (input.type === 'keyDown' && input.key === 'Escape') {
         event.preventDefault()
-        hide()
+        window.webContents.send(usageChannels.trayEscape)
       }
     })
     const load = rendererUrl
@@ -133,6 +136,12 @@ export function createTrayPanel({ iconPath, rendererUrl, showMain }: Options) {
       showMain()
     },
     getWindow: () => panel,
+    setSwitching(active: boolean): void {
+      switching = active
+      if (!active && requested && panel && !panel.isDestroyed() && panel.isVisible() && !panel.isFocused()) {
+        panel.focus()
+      }
+    },
     resize(height: number): void {
       if (!Number.isFinite(height) || height <= 0) return
       preferredHeight = Math.min(trayPanelMaxHeight, Math.ceil(height))

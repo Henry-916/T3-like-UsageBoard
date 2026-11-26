@@ -5,7 +5,7 @@ import type { AccountChanges, AccountsReport, AddManualAccount } from '../../sha
 import type { AccountConfig, DiscoveredAccount, UsageProviderKind } from '../../shared/types'
 import { readConfig, updateConfig, type AppConfig } from '../configStore'
 import { hasOpenCodeDbCredential } from '../limits/probes/opencode'
-import { discoverAccounts, pathKey, providerNames } from './discovery'
+import { discoverAccounts, pathKey, providerNames, providers } from './discovery'
 import { createIdentityStore, credentialEmail, field, identityKey, normalizeEmail } from './identities'
 import { cliToken } from '../limits/probes/agyRenewal'
 import { credentialCandidates } from '../limits/probes/cli'
@@ -69,8 +69,6 @@ export function createAccountService({
     const credentialPaths = provider === 'antigravity' ? account.credentialPaths ?? [] : credentialCandidates(account)
     if (account.currentCredential) return true
     if (provider === 'antigravity') {
-      const method = account.limitsEnv?.ANTIGRAVITY_AUTH_METHOD?.trim()
-      if (method && method !== 'oauth-personal' && method !== 'oauth-business') return false
       for (const path of credentialPaths) {
         const info = await stat(path).catch(() => undefined)
         if (info?.isFile() && info.size > 2) return true
@@ -164,6 +162,10 @@ export function createAccountService({
       accountKeys.set(representative, { key: source.key, offlineEmail: source.offlineEmail })
       return [{ account: representative, hasCredential: Boolean(source.hasCredential) }]
     })
+    visible.sort((a, b) =>
+      providers.indexOf(a.account.provider) - providers.indexOf(b.account.provider) ||
+      Number(Boolean(b.account.current)) - Number(Boolean(a.account.current)) ||
+      a.account.displayName.localeCompare(b.account.displayName, 'zh-CN'))
     return { visible, hiddenAutoCount: candidates.filter(isHidden).length }
   }
 
@@ -174,7 +176,6 @@ export function createAccountService({
     const config = await readConfig(userData)
     const { visible, hiddenAutoCount } = await visibleAccounts(config)
     return {
-      scanT3: config.scanT3,
       hiddenAutoCount,
       accounts: visible.map(({ account, hasCredential }) => ({
         id: account.id, provider: account.provider, displayName: account.displayName, origin: account.origin,
@@ -356,10 +357,6 @@ export function createAccountService({
         ...config,
         accountPreferences: { ...config.accountPreferences, [id]: { ...config.accountPreferences[id], enabled: changes.enabled ?? config.accountPreferences[id]?.enabled } }
       }))
-      return list()
-    },
-    async setScanT3(scanT3: boolean): Promise<AccountsReport> {
-      await updateConfig(userData, config => ({ ...config, scanT3 }))
       return list()
     },
     async remove(id: string): Promise<AccountsReport> {

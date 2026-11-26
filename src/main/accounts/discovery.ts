@@ -4,7 +4,6 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { DiscoveredAccount, UsageProviderKind } from '../../shared/types'
 import type { AppConfig } from '../configStore'
-import { readT3Instances } from './t3Reader'
 
 export const providers = ['antigravity', 'opencode', 'codex', 'claude'] as const
 export const providerNames = { antigravity: 'Antigravity', opencode: 'OpenCode', codex: 'Codex', claude: 'Claude Code' }
@@ -75,23 +74,6 @@ export async function discoverAccounts(
     }
     if (provider === 'opencode' && !seen.size && env.OPENCODE_API_KEY?.trim()) {
       add({ id: 'native:opencode:env', provider, origin: 'native', displayName: providerNames[provider], enabled: true })
-    }
-  }
-  if (config.scanT3) {
-    for (const item of await readT3Instances(home)) {
-      const candidates = [...new Set([
-        ...(item.profileDir ? [item.profileDir] : []),
-        ...(item.configuredDir ? [item.configuredDir] : []),
-        ...locations(item.provider, item.env, home, false)
-      ].map(dir => expandDir(dir, home)))]
-      const credentialPaths = candidates.flatMap(dir => credentials[item.provider].map(name => join(dir, name)))
-      for (const [index, dataDir] of candidates.entries()) {
-        add({
-          id: `t3:${item.id}${index ? `:data:${createHash('sha256').update(dataDir).digest('hex').slice(0, 16)}` : ''}`,
-          provider: item.provider, origin: 't3', displayName: item.displayName, enabled: item.enabled,
-          dataDir, credentialPaths, limitsEnv: { ANTIGRAVITY_AUTH_METHOD: item.authMethod }
-        })
-      }
     }
   }
   for (const item of config.accounts) {

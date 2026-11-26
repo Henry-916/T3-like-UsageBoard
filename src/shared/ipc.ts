@@ -34,12 +34,13 @@ export const usageChannels = {
   downloadUpdate: 'usage:download-update',
   installUpdate: 'usage:install-update',
   updateStateChanged: 'usage:update-state-changed',
-  setScanT3: 'usage:set-scan-t3',
   preferences: 'usage:get-ui-preferences',
   savePreferences: 'usage:save-ui-preferences',
   preferencesUpdated: 'usage:ui-preferences-updated',
   trayResize: 'usage:tray-resize',
-  trayOpenMain: 'usage:tray-open-main'
+  trayOpenMain: 'usage:tray-open-main',
+  trayEscape: 'usage:tray-escape',
+  trayHide: 'usage:tray-hide'
 } as const
 
 export interface UsageApi {
@@ -75,10 +76,11 @@ export interface UsageApi {
   downloadUpdate(): Promise<UpdateState>
   installUpdate(): Promise<void>
   onUpdateStateChanged(listener: (state: UpdateState) => void): () => void
-  setScanT3(enabled: boolean): Promise<AccountsReport>
   getUiPreferences(): Promise<UiPreferences>
   saveUiPreferences(changes: UiPreferences): Promise<void>
   onUiPreferencesUpdate(listener: (preferences: UiPreferences) => void): () => void
   trayResize(height: number): Promise<void>
   trayOpenMain(): Promise<void>
+  trayHide(): Promise<void>
+  onTrayEscape(listener: () => void): () => void
 }

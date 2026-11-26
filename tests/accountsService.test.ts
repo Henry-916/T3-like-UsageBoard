@@ -32,7 +32,6 @@ test('imports credentials privately, persists preferences, and removes the impor
     expect(await readFile(credential, 'utf8')).toBe(sensitive)
     expect((await service.update(view.id, { displayName: 'Renamed', enabled: false })).accounts[0])
       .toMatchObject({ displayName: '正在识别…', enabled: false })
-    expect((await service.setScanT3(false)).scanT3).toBe(false)
     expect((await service.remove(view.id)).accounts).toEqual([])
     await expect(readFile(item.credentialPath!)).rejects.toMatchObject({ code: 'ENOENT' })
   } finally {
@@ -67,14 +66,7 @@ test('lists only usable auto credentials, persists hiding, and restores without 
     const service = createAccountService({
       userData, pickDirectory: async () => files[2][0], pickCredential: async () => undefined,
       encrypt: () => { throw new Error('Unexpected encryption') }, decrypt: () => { throw new Error('Unexpected decryption') },
-      discover: async config => {
-        const accounts = await discoverAccounts(config, { home, env })
-        accounts.push({
-          ...accounts.find(account => account.provider === 'antigravity')!,
-          id: 't3:vertex', origin: 't3', limitsEnv: { ANTIGRAVITY_AUTH_METHOD: 'vertex' }
-        })
-        return accounts
-      }
+      discover: config => discoverAccounts(config, { home, env })
     })
     const initial = await service.list()
     expect(initial.accounts.map(account => account.provider)).toEqual(['antigravity', 'opencode', 'claude'])
@@ -203,10 +195,11 @@ test('merges normalized manual and current identities while routing reads to the
     expect(await readFile(representative.credentialPath!, 'utf8')).toBe(`encrypted:${current.toString()}`)
     expect((await readConfig(userData)).accounts).toHaveLength(1)
     current = Buffer.from(cli('different@example.com', 'new-fixture'))
-    expect((await service.list()).accounts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id, canSwitch: true }),
-      expect.objectContaining({ id: 'native:antigravity:credman', current: true, displayName: 'different@example.com' })
-    ]))
+    // The active account is hoisted to the first row of its provider group.
+    expect((await service.list()).accounts).toMatchObject([
+      { id: 'native:antigravity:credman', current: true, displayName: 'different@example.com' },
+      { id, canSwitch: true }
+    ])
   } finally {
     await rm(home, { recursive: true, force: true })
   }

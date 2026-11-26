@@ -45,6 +45,7 @@ export function registerIpc(
     if (typeof height === 'number' && Number.isFinite(height)) tray.resize(height)
   })
   ipcMain.handle(usageChannels.trayOpenMain, event => { ownTray(event); tray.openMain() })
+  ipcMain.handle(usageChannels.trayHide, event => { ownTray(event); tray.hide() })
 
   ipcMain.handle(usageChannels.minimize, (event) => ownWindow(event).minimize())
   ipcMain.handle(usageChannels.isMaximized, event => {
@@ -93,10 +94,16 @@ export function registerIpc(
     return limits.consumeResetCredit(accountId)
   })
   ipcMain.handle(usageChannels.accounts, event => { ownWindow(event); return accounts.list() })
-  ipcMain.handle(usageChannels.switchAccount, (event, id: unknown) => {
-    ownWindow(event)
+  ipcMain.handle(usageChannels.switchAccount, async (event, id: unknown) => {
+    const fromTray = !matches(event, getWindow())
+    mainOrTray(event)
     if (typeof id !== 'string' || !id.trim() || id.length > 512) throw new Error('账号无效。')
-    return switchAccount(id)
+    if (fromTray) tray.setSwitching(true)
+    try {
+      return await switchAccount(id)
+    } finally {
+      if (fromTray) tray.setSwitching(false)
+    }
   })
   ipcMain.handle(usageChannels.addAccount, async (event, input: unknown) => {
     ownWindow(event)
@@ -109,11 +116,6 @@ export function registerIpc(
     const update = accountChangesSchema.safeParse(changes)
     if (typeof id !== 'string' || !update.success) throw new Error('Invalid account changes')
     return updated(await accounts.update(id, update.data))
-  })
-  ipcMain.handle(usageChannels.setScanT3, async (event, enabled: unknown) => {
-    ownWindow(event)
-    if (typeof enabled !== 'boolean') throw new Error('Invalid T3 scan setting')
-    return updated(await accounts.setScanT3(enabled))
   })
   ipcMain.handle(usageChannels.removeAccount, async (event, id: unknown) => {
     ownWindow(event)

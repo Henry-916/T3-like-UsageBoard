@@ -23,7 +23,7 @@ interface Options {
   resetRecheckDelaysMs?: readonly number[]
 }
 
-const rank = { native: 0, t3: 1, manual: 2 }
+const rank = { native: 0, manual: 1 }
 type Reading = {
   data: LimitAccountReading
   identity: string
@@ -82,7 +82,7 @@ export function createLimitsService({
     if (!cache) return
     const entries = await cache.load()
     if (!entries.length) return
-    let active: ReadonlyMap<string, Pick<AccountView, 'provider' | 'origin' | 'displayName' | 'current'>> | undefined = accountViews
+    let active: ReadonlyMap<string, Pick<AccountView, 'provider' | 'origin' | 'displayName' | 'current' | 'canSwitch'>> | undefined = accountViews
     if (!active) {
       try {
         const discovered = await discover()
@@ -97,7 +97,7 @@ export function createLimitsService({
       const account = active.get(id)
       if (!account || account.provider !== data.provider || account.origin !== data.origin) continue
       if (account.current && account.displayName !== data.displayName) continue
-      readings.set(id, { identity, data: { ...data, displayName: account.displayName, current: account.current, stale: true } })
+      readings.set(id, { identity, data: { ...data, displayName: account.displayName, current: account.current, canSwitch: account.canSwitch, stale: true } })
       if (checkedAt === null || data.checkedAt > checkedAt) checkedAt = data.checkedAt
     }
     if (readings.size) publish(false, checkedAt)
@@ -162,7 +162,7 @@ export function createLimitsService({
           issues.delete(account.id)
           continue
         }
-        const { id, displayName, origin, provider, current } = latest
+        const { id, displayName, origin, provider, current, canSwitch } = latest
         if (current && readings.get(id)?.data.displayName !== displayName) readings.delete(id)
         const prev = readings.get(id)
         if (result.kind === 'failed') {
@@ -178,14 +178,14 @@ export function createLimitsService({
           readings.set(id, {
             identity,
             data: {
-              id, displayName, origin, provider, current, windows: result.windows, plan: result.plan, resetCredits: result.resetCredits,
+              id, displayName, origin, provider, current, canSwitch, windows: result.windows, plan: result.plan, resetCredits: result.resetCredits,
               resetCreditsExpiresAt: result.resetCreditsExpiresAt, nextResetCreditId: result.nextResetCreditId,
               checkedAt, stale: false,
               previous: prev?.identity === identity ? { checkedAt: prev.data.checkedAt, windows: prev.data.windows } : undefined
             }
           })
         } else if (result.kind === 'failed' && prev) {
-          readings.set(id, { ...prev, data: { ...prev.data, displayName, current, stale: true } })
+          readings.set(id, { ...prev, data: { ...prev.data, displayName, current, canSwitch, stale: true } })
         } else {
           readings.delete(id)
         }
@@ -291,8 +291,9 @@ export function createLimitsService({
         const account = next.get(id)
         if (!account) readings.delete(id)
         else if (account.current && account.displayName !== entry.data.displayName) readings.delete(id)
-        else if (account.displayName !== entry.data.displayName || account.current !== entry.data.current) {
-          readings.set(id, { ...entry, data: { ...entry.data, displayName: account.displayName, current: account.current } })
+        else if (account.displayName !== entry.data.displayName || account.current !== entry.data.current
+          || account.canSwitch !== entry.data.canSwitch) {
+          readings.set(id, { ...entry, data: { ...entry.data, displayName: account.displayName, current: account.current, canSwitch: account.canSwitch } })
         }
       }
       for (const [id, issue] of issues) {

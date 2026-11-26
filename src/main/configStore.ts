@@ -4,7 +4,6 @@ import { accountConfigSchema, modelAliasesSchema, priceOverridesSchema, uiPrefer
 import { readJson, writeJsonAtomic } from './jsonFile'
 
 const configSchema = z.object({
-  scanT3: z.boolean().default(true),
   accounts: z.array(accountConfigSchema).default([]),
   hiddenAccountIds: z.array(z.string().trim().min(1)).default([]),
   accountPreferences: z.record(z.string(), z.object({

@@ -32,9 +32,10 @@ export interface LimitsProbeContext {
   manualApiKey?: string
 }
 
-export type AccountOrigin = 'native' | 't3' | 'manual'
+export type AccountOrigin = 'native' | 'manual'
 export interface LimitAccountReading {
   current?: boolean
+  canSwitch?: boolean
   id: string
   provider: UsageProviderKind
   displayName: string
@@ -86,7 +87,6 @@ export interface AccountView {
 }
 
 export interface AccountsReport {
-  scanT3: boolean
   hiddenAutoCount: number
   accounts: AccountView[]
 }

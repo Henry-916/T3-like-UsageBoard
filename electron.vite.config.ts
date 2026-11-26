@@ -21,7 +21,7 @@ export default defineConfig({
             tag: 'meta',
             attrs: {
               'http-equiv': 'Content-Security-Policy',
-              content: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'"
+              content: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'"
             },
             injectTo: 'head-prepend'
           }]

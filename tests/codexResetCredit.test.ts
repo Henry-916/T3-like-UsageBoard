@@ -62,8 +62,8 @@ it.each(['network', 503, 408, 429, 'invalid-success'])('pins ID and key across a
     .mockResolvedValueOnce(Response.json({ code: 'already_redeemed' }, { status: 409 }))
     .mockResolvedValueOnce(Response.json({ code: 'nothing_to_reset' }))
   await expect(consume(account('native'), ctx, 'first')).rejects.toThrow()
-  await expect(consume(account('alias', 't3'), ctx, 'second')).rejects.toThrow()
-  await expect(consume(account('alias', 't3'), ctx, 'second')).resolves.toBe('alreadyRedeemed')
+  await expect(consume(account('alias', 'manual'), ctx, 'second')).rejects.toThrow()
+  await expect(consume(account('alias', 'manual'), ctx, 'second')).resolves.toBe('alreadyRedeemed')
   await expect(consume(account('native'), ctx, 'second')).resolves.toBe('nothingToReset')
   expect(body(ctx, 1)).toEqual(body(ctx, 0))
   expect(body(ctx, 2)).toEqual(body(ctx, 0))
@@ -113,7 +113,7 @@ it('serializes the same canonical directory across origins even if only one has 
   ctx2.fetch.mockResolvedValueOnce(Response.json({ code: 'reset' }))
   const first = consume(account('native'), ctx1, 'first')
   await firstStarted
-  const second = consume(account('alias', 't3'), ctx2, 'second')
+  const second = consume(account('alias', 'manual'), ctx2, 'second')
   await new Promise(resolve => setImmediate(resolve))
   expect(ctx2.fetch).not.toHaveBeenCalled()
   finish(Response.json({ code: 'reset' }))
@@ -165,12 +165,11 @@ it('looks up the ticket on CLI-only accounts and stays on CLI after ambiguous su
   expect(withOAuth.fetch).not.toHaveBeenCalled()
 })
 
-it('never invokes CLI for T3 or a native/manual directory aliased into T3', async () => {
+it('never invokes CLI for a native/manual directory aliased into T3', async () => {
   const consume = createCodexResetCreditConsumer()
   const ctx = context(undefined, '')
   mocks.realpath.mockImplementation(async (path: string) => path === account('alias').dataDir
     ? join(homedir(), '.t3', 'userdata', 'codex') : path)
-  await expect(consume(account('t3', 't3'), ctx, 'first')).rejects.toThrow('请在 T3 Code 中重新登录')
   await expect(consume(account('alias', 'manual'), ctx, 'first')).rejects.toThrow('请在 T3 Code 中重新登录')
   expect(mocks.resolveCli).not.toHaveBeenCalled()
   expect(mocks.exchange).not.toHaveBeenCalled()

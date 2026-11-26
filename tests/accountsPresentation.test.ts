@@ -28,7 +28,7 @@ describe('account row', () => {
 
   it('offers switch confirmation only for supported, non-current accounts with switchable credentials', () => {
     expect(renderRow()).toContain('aria-haspopup="dialog"')
-    expect(renderRow({ provider: 'codex', origin: 't3' })).toContain('>设为当前</button>')
+    expect(renderRow({ provider: 'codex', origin: 'native' })).toContain('>设为当前</button>')
     expect(renderRow({ canSwitch: false, origin: 'native' })).not.toContain('设为当前')
     expect(renderRow({ canSwitch: undefined })).not.toContain('设为当前')
     expect(renderRow({ provider: 'claude' })).not.toContain('设为当前')

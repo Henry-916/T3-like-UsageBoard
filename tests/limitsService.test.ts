@@ -8,9 +8,9 @@ import type { DiscoveredAccount } from '../src/shared/types'
 
 test('deduplicates identities, keeps last-good on failure and removes disabled accounts immediately', async () => {
   const native: DiscoveredAccount = { id: 'native', provider: 'antigravity', displayName: 'Native', enabled: true, origin: 'native' }
-  const t3: DiscoveredAccount = { ...native, id: 't3', origin: 't3', displayName: 'T3' }
+  const legacy: DiscoveredAccount = { ...native, id: 'legacy', origin: 'manual', displayName: 'Legacy' }
   const codex: DiscoveredAccount = { ...native, id: 'codex', provider: 'codex', displayName: 'Codex' }
-  let discovered = [native, t3, codex]
+  let discovered = [native, legacy, codex]
   let now = Date.parse('2026-11-24T02:00:00Z')
   let offline = false
   let nativeExpired = false
@@ -27,7 +27,7 @@ test('deduplicates identities, keeps last-good on failure and removes disabled a
     onUpdate: data => updates.push(data), now: () => now
   })
   const first = await service.refresh()
-  expect(first.accounts.map(a => a.id)).toEqual(['t3', 'codex'])
+  expect(first.accounts.map(a => a.id)).toEqual(['legacy', 'codex'])
   expect(updates[0].refreshing).toBe(true)
   nativeExpired = true
   expect((await service.refresh()).issues).toBeUndefined()
@@ -38,7 +38,7 @@ test('deduplicates identities, keeps last-good on failure and removes disabled a
   expect(recovered.checkedAt).not.toEqual(first.checkedAt)
   expect(recovered.issues).toEqual([
     { id: 'native', displayName: 'Native', provider: 'antigravity', origin: 'native', cached: true, reason: 'expired' },
-    { id: 't3', displayName: 'T3', provider: 'antigravity', origin: 't3', cached: true, reason: 'failed' },
+    { id: 'legacy', displayName: 'Legacy', provider: 'antigravity', origin: 'manual', cached: true, reason: 'failed' },
     { id: 'codex', displayName: 'Codex', provider: 'codex', origin: 'native', cached: true, reason: 'failed' }
   ])
   discovered = [native]
@@ -50,7 +50,7 @@ test('deduplicates identities, keeps last-good on failure and removes disabled a
 })
 
 const native: DiscoveredAccount = { id: 'native', provider: 'antigravity', displayName: 'Google', origin: 'native', enabled: true }
-const t3: DiscoveredAccount = { ...native, id: 't3', origin: 't3', displayName: 'T3' }
+const legacy: DiscoveredAccount = { ...native, id: 'legacy', origin: 'manual', displayName: 'Legacy' }
 const ok: LimitsProbeResult = {
   kind: 'ok', fingerprint: 'same-account', resetCredits: 1,
   windows: [{ id: 'weekly', kind: 'weekly', label: 'Weekly', usedPercent: 42 }]
@@ -148,10 +148,10 @@ test('suppresses only issues with a healthy same-provider name or known identity
   let fail = false
   let fallback: LimitsProbeResult = { kind: 'failed', reason: 'expired' }
   const service = createLimitsService({
-    discover: async () => [native, t3, sameName, otherProvider],
+    discover: async () => [native, legacy, sameName, otherProvider],
     readCredential: async () => undefined, getManualApiKey: async () => undefined, onUpdate: () => undefined,
     probes: {
-      antigravity: async account => account.id === 'manual' ? fallback : account.id === 't3' && fail ? fallback : ok,
+      antigravity: async account => account.id === 'manual' ? fallback : account.id === 'legacy' && fail ? fallback : ok,
       codex: async () => ({ kind: 'failed', reason: 'cli_missing' }), claude: unsupported, opencode: unsupported
     }
   })
@@ -170,7 +170,7 @@ test('restores stale readings before probing and persists disabled or removed ro
   const userData = await mkdtemp(join(tmpdir(), 'limits-service-'))
   try {
     const path = join(userData, 'limits-cache.json')
-    let discovered = [native, t3]
+    let discovered = [native, legacy]
     let result: LimitsProbeResult = ok
     let now = Date.parse('2026-11-24T02:00:00Z')
     const options = {
@@ -186,10 +186,10 @@ test('restores stale readings before probing and persists disabled or removed ro
     original.stop()
     expect(JSON.parse(await readFile(path, 'utf8'))).toEqual([
       expect.objectContaining({ id: 'native', identity: 'antigravity:fp:same-account' }),
-      expect.objectContaining({ id: 't3', identity: 'antigravity:fp:same-account' })
+      expect.objectContaining({ id: 'legacy', identity: 'antigravity:fp:same-account' })
     ])
 
-    discovered = [native, { ...t3, enabled: false }]
+    discovered = [native, { ...legacy, enabled: false }]
     result = { kind: 'failed', reason: 'expired' }
     const restored = createLimitsService(options)
     await restored.ready

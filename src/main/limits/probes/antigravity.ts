@@ -99,7 +99,6 @@ function modelWindows(body: unknown): LimitWindow[] {
 
 export interface AntigravityProbeDeps {
   tokenCache?: AntigravityTokenCache
-  getScanT3?: () => Promise<boolean>
   resolveCli?: typeof resolveAgyCli
   renewCliToken?: (params: CliRenewParams) => Promise<CliRenewOutcome>
   readCurrentCredential?: () => Promise<{ blob: Buffer } | undefined>
@@ -151,8 +150,6 @@ async function probe(
 
   try {
     ctx.signal.throwIfAborted()
-    let method = account.limitsEnv?.ANTIGRAVITY_AUTH_METHOD
-    if (method && method !== 'oauth-personal' && method !== 'oauth-business') return { kind: 'unsupported' }
     const paths = account.credentialPaths ?? []
     const isAcp = (path: string): boolean => basename(path).toLowerCase() === 'acp_token.json'
     let stored: unknown
@@ -172,6 +169,7 @@ async function probe(
 
     let accessToken: string
     let project: string | undefined
+    let method: 'oauth-personal' | 'oauth-business' | undefined
     let credentialFingerprint: string
     let recover: ((rejected?: string) => Promise<CliRenewOutcome | { kind: 'cli_missing' }>) | undefined
     let rejectAccess: ((rejected: string) => Promise<unknown>) | undefined
@@ -202,7 +200,7 @@ async function probe(
       const original = cliToken.parse(stored)
       const { token } = original
       const storedMethod = original.auth_method === 'consumer' ? 'oauth-personal' : original.auth_method
-      const authMethod = method || storedMethod || 'oauth-personal'
+      const authMethod = storedMethod || 'oauth-personal'
       if (authMethod !== 'oauth-personal' && authMethod !== 'oauth-business') return { kind: 'unsupported' }
       method = authMethod
       accessToken = token.access_token
@@ -214,7 +212,7 @@ async function probe(
           const compareAndWrite = deps.compareAndWriteCurrentCredential
           recover = () => queueRenewal(ctx.signal, async () => {
             if (deps.readCurrentCredential && !(await deps.readCurrentCredential())?.blob.equals(expected)) return { kind: 'failed' }
-            const executable = await (deps.resolveCli ?? resolveAgyCli)({ scanT3: await deps.getScanT3?.() })
+            const executable = await (deps.resolveCli ?? resolveAgyCli)()
             ctx.signal.throwIfAborted()
             if (!executable) return { kind: 'cli_missing' } as const
             attemptedRenewal = true
@@ -255,9 +253,7 @@ async function probe(
             if (cached && cached.accessToken !== rejected) return { kind: 'ok', token: cached }
             const rotated = rejected ? await discardRejectedAccess(rejected) : (await tokenCache.getEntry(key))?.refreshToken
             ctx.signal.throwIfAborted()
-            const scanT3 = await deps.getScanT3?.()
-            ctx.signal.throwIfAborted()
-            const executable = await (deps.resolveCli ?? resolveAgyCli)({ scanT3 })
+            const executable = await (deps.resolveCli ?? resolveAgyCli)()
             ctx.signal.throwIfAborted()
             if (!executable) return { kind: 'cli_missing' }
             attemptedRenewal = true
@@ -308,7 +304,7 @@ function failure(kind: 'failed' | 'expired' | 'cli_missing'): LimitsProbeResult 
 }
 
 async function queryQuota(
-  accessToken: string, project: string | undefined, method: string | undefined,
+  accessToken: string, project: string | undefined, method: 'oauth-personal' | 'oauth-business' | undefined,
   credentialFingerprint: string, ctx: LimitsProbeContext,
   request: (url: string, init: RequestInit, signal?: AbortSignal) => Promise<unknown>
 ): Promise<LimitsProbeResult | { kind: 'unauthorized' }> {

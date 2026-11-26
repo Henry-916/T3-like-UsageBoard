@@ -1,12 +1,16 @@
-import { ArrowUpRight, LoaderCircle, RotateCw } from 'lucide-react'
+import { ArrowUpRight, LoaderCircle, RotateCw, Ticket } from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { UsageProviderKind } from '../../shared/types'
 import { useLimitsData } from '../hooks/useLimitsData'
-import { limitTimeLeft, resetBadgeDuration } from '../limitsPresentation'
-import { trayGroups, trayWindowLabel } from '../trayPresentation'
+import { limitTimeLeft } from '../limitsPresentation'
+import { trayGroups, trayQuotaTooltip, trayResetTime, trayWindowLabel } from '../trayPresentation'
 import { providerInfo } from '../usagePresentation'
+import { accountSwitchErrorMessage } from './AccountsDialog'
 import { ProviderMark } from './ProviderMark'
 import '../styles/tray-panel.css'
+
+type ConfirmTarget = { accountId: string; displayName: string; provider: UsageProviderKind }
+type Tooltip = { key: string; text: string; below: boolean }
 
 export function TrayPanel() {
   const { report, loading, refreshing, failed, refresh } = useLimitsData()
@@ -14,6 +18,10 @@ export function TrayPanel() {
   const [now, setNow] = useState(Date.now)
   const [canScroll, setCanScroll] = useState(false)
   const [openFailed, setOpenFailed] = useState(false)
+  const [tooltip, setTooltip] = useState<Tooltip | null>(null)
+  const [confirming, setConfirming] = useState<ConfirmTarget | null>(null)
+  const [switching, setSwitching] = useState<string | null>(null)
+  const [switchError, setSwitchError] = useState('')
   const list = useRef<HTMLDivElement>(null)
   const content = useRef<HTMLDivElement>(null)
   const footer = useRef<HTMLElement>(null)
@@ -43,6 +51,25 @@ export function TrayPanel() {
       window.removeEventListener('focus', updateTime)
     }
   }, [])
+
+  useEffect(() => window.usageApi.onTrayEscape(() => {
+    if (switching !== null) return
+    if (confirming) {
+      setConfirming(null)
+      setSwitchError('')
+    } else void window.usageApi.trayHide()
+  }), [confirming, switching])
+
+  useEffect(() => {
+    function resetOnBlur() {
+      if (switching !== null) return
+      setConfirming(null)
+      setSwitchError('')
+      setTooltip(null)
+    }
+    window.addEventListener('blur', resetOnBlur)
+    return () => window.removeEventListener('blur', resetOnBlur)
+  }, [switching])
 
   useLayoutEffect(() => {
     const listNode = list.current
@@ -74,6 +101,29 @@ export function TrayPanel() {
   const readFailed = failed || (!groups.length && hidden !== null &&
     report?.issues?.some(issue => !hidden.includes(issue.provider)))
 
+  function showTooltip(key: string, text: string | null, row: HTMLElement) {
+    if (!text) {
+      setTooltip(null)
+      return
+    }
+    setTooltip({ key, text, below: row.getBoundingClientRect().top < 48 })
+  }
+
+  async function confirmSwitch() {
+    if (!confirming || switching) return
+    setSwitching(confirming.accountId)
+    setSwitchError('')
+    try {
+      await window.usageApi.switchAccount(confirming.accountId)
+      setConfirming(null)
+      await refresh()
+    } catch (error) {
+      setSwitchError(accountSwitchErrorMessage(error))
+    } finally {
+      setSwitching(null)
+    }
+  }
+
   return (
     <section className="tray-panel" role="dialog" aria-label="托盘额度">
       <div className="tray-scroll" ref={list} tabIndex={canScroll ? 0 : undefined} role="region" aria-label="账号额度">
@@ -88,35 +138,77 @@ export function TrayPanel() {
           {groups.map(({ provider, accounts }) => (
             <section className="tray-provider" key={provider} aria-labelledby={`tray-${provider}`}>
               <h2 id={`tray-${provider}`}><ProviderMark provider={provider} className="size-4" />{providerInfo[provider].label}</h2>
-              {accounts.map(({ account, windows }) => (
-                <article className="tray-account" key={account.id}>
-                  <h3 className="tray-account-heading">
-                    <span className="tray-ellipsis" title={account.displayName}>{account.displayName}</span>
-                    {account.current && <span className="account-current-badge">当前</span>}
-                  </h3>
-                  <ul role="list">
-                    {windows.map(({ window, reading }, index) => {
-                      const tick = limitTimeLeft(reading, now)
-                      const reset = resetBadgeDuration(reading.resetsAt, now)?.replace('分钟', '分')
-                      return (
-                        <li className="tray-quota" key={`${window.windowId}:${index}`}>
-                          <span className="tray-ellipsis tray-quota-label" title={window.label}>{trayWindowLabel(window)}</span>
-                          <span className="tray-track" aria-hidden="true" style={{
-                            '--tray-remaining': `${reading.remainingPercent}%`,
-                            '--limit-tick-at': tick === null ? undefined : `clamp(3px, ${tick}%, calc(100% - 3px))`
-                          } as CSSProperties}>
-                            {tick !== null && <span className="tray-tick" />}
-                          </span>
-                          <span className="tray-quota-numbers">
-                            <strong title={reading.stale ? '缓存数据' : undefined}>{Math.round(reading.remainingPercent)}%</strong>
-                            {reset && <time className="tray-ellipsis" dateTime={reading.resetsAt} title={reset}>{reset}</time>}
-                          </span>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                </article>
-              ))}
+              {accounts.map(({ account, windows }) => {
+                const switchable = !account.current && account.canSwitch && (provider === 'codex' || provider === 'antigravity')
+                const credits = provider === 'codex' ? account.resetCredits ?? 0 : 0
+                const confirmingHere = confirming?.accountId === account.id
+                return (
+                  <article className="tray-account" key={account.id}>
+                    <h3 className="tray-account-heading">
+                      <span className="tray-ellipsis" title={account.displayName}>{account.displayName}</span>
+                      <span className="tray-account-meta">
+                        {credits > 0 && <span className="tray-credit" title="可在主面板使用重置券">
+                          <Ticket size={11} aria-hidden="true" />{credits}
+                        </span>}
+                        {account.current ? <span className="account-current-badge">当前</span>
+                          : switchable ? <button type="button" className="tray-switch" disabled={switching !== null}
+                            aria-expanded={confirmingHere} onClick={() => {
+                              setSwitchError('')
+                              setConfirming(confirmingHere ? null : { accountId: account.id, displayName: account.displayName, provider })
+                            }}>切换</button> : null}
+                      </span>
+                    </h3>
+                    {confirmingHere && (
+                      <div className="tray-switch-confirm">
+                        <p>将重启 {providerInfo[provider].label} App</p>
+                        <div className="tray-switch-actions">
+                          <button type="button" autoFocus disabled={switching !== null}
+                            onClick={() => { setConfirming(null); setSwitchError('') }}>取消</button>
+                          <button type="button" className="tray-switch-confirm-action" disabled={switching !== null}
+                            aria-busy={switching === account.id} onClick={() => void confirmSwitch()}>
+                            {switching === account.id
+                              ? <><LoaderCircle size={11} className="motion-safe:animate-spin" aria-hidden="true" />切换中…</>
+                              : '确认切换'}
+                          </button>
+                        </div>
+                        {switchError && <p className="tray-switch-error" role="alert">{switchError}</p>}
+                      </div>
+                    )}
+                    <ul role="list">
+                      {windows.map(({ window, reading }, index) => {
+                        const tick = limitTimeLeft(reading, now)
+                        const reset = trayResetTime(reading.resetsAt, now)
+                        const key = `${account.id}:${window.windowId}:${index}`
+                        const tip = trayQuotaTooltip(reading, now, tick)
+                        const show = tooltip?.key === key
+                        return (
+                          <li className="tray-quota" key={key} tabIndex={tip ? 0 : undefined}
+                            aria-label={tip ?? undefined}
+                            onPointerEnter={event => showTooltip(key, tip, event.currentTarget)}
+                            onPointerLeave={() => setTooltip(current => current?.key === key ? null : current)}
+                            onFocus={event => showTooltip(key, tip, event.currentTarget)}
+                            onBlur={() => setTooltip(current => current?.key === key ? null : current)}>
+                            <span className="tray-ellipsis tray-quota-label" title={window.label}>{trayWindowLabel(window)}</span>
+                            <span className="tray-track" aria-hidden="true" style={{
+                              '--tray-remaining': `${reading.remainingPercent}%`,
+                              '--limit-tick-at': tick === null ? undefined : `clamp(3px, ${tick}%, calc(100% - 3px))`
+                            } as CSSProperties}>
+                              {tick !== null && <span className="tray-tick" />}
+                            </span>
+                            <strong className="tray-percent" title={reading.stale ? '缓存数据' : undefined}>
+                              {Math.round(reading.remainingPercent)}%
+                            </strong>
+                            {reset
+                              ? <time className="tray-reset" dateTime={reading.resetsAt} title={reset}>{reset}</time>
+                              : <span className="tray-reset" aria-hidden="true" />}
+                            {show && tip && <span className="tray-tip" data-placement={tooltip.below ? 'below' : 'above'} role="tooltip">{tip}</span>}
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </article>
+                )
+              })}
             </section>
           ))}
         </div>

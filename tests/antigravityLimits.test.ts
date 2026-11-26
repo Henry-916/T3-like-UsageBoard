@@ -7,7 +7,7 @@ import { antigravityTokenKey, createAntigravityTokenCache } from '../src/main/li
 import type { DiscoveredAccount } from '../src/shared/types'
 
 const account: DiscoveredAccount = {
-  id: 'fake-ag', provider: 'antigravity', origin: 't3', enabled: true, displayName: 'Fake',
+  id: 'fake-ag', provider: 'antigravity', origin: 'native', enabled: true, displayName: 'Fake',
   credentialPaths: ['antigravity-oauth-token', 'acp_token.json']
 }
 
@@ -40,7 +40,7 @@ it('renews only the current slot through CAS, and persists normalized userinfo i
   expect(fetch).not.toHaveBeenCalled()
 })
 
-it('refreshes ACP in memory, merges business-first quotas, and hashes the Google identity', async () => {
+it('refreshes ACP in memory, merges daily-first quotas, and hashes the Google identity', async () => {
   const signal = new AbortController().signal
   const readCredential = vi.fn(async () => ({
     client_id: 'fake-client', client_secret: 'fake-secret', refresh_token: 'fake-refresh', project_id: 'fake-project'
@@ -71,18 +71,17 @@ it('refreshes ACP in memory, merges business-first quotas, and hashes the Google
       { bucketId: 'gemini-carbon-rolling', window: '5h', remainingFraction: 0, disabled: true }
     ] })
   })
-  const business: DiscoveredAccount = { ...account, limitsEnv: { ANTIGRAVITY_AUTH_METHOD: 'oauth-business' } }
   const ctx = { readCredential, fetch, signal }
-  const result = await probeAntigravity(business, ctx)
+  const result = await probeAntigravity(account, ctx)
   expect(result).toEqual({
     kind: 'ok', fingerprint: createHash('sha256').update('google-account\0fake-google-id').digest('hex'),
     windows: [
-      { id: 'gemini-argon-rolling', label: 'Argon Pro · 5-hour', kind: 'session', usedPercent: 75, windowDurationMins: 300 },
+      { id: 'gemini-argon-rolling', label: 'Gemini Argon · 5-hour', kind: 'session', usedPercent: 25, windowDurationMins: 300 },
       { id: '3p-weekly', label: 'Claude & GPT (shared) · Weekly', kind: 'weekly', usedPercent: 50, windowDurationMins: 10080 }
     ]
   })
   expect(readCredential.mock.calls).toEqual([['acp_token.json']])
-  expect(await probeAntigravity(business, ctx)).toEqual(result)
+  expect(await probeAntigravity(account, ctx)).toEqual(result)
   expect(fetch.mock.calls.filter(([url]) => url === 'https://oauth2.googleapis.com/token')).toHaveLength(1)
 })
 
@@ -196,11 +195,11 @@ it('serializes across instances, double-checks the cache and skips canceled queu
     await gate
     return { kind: 'ok', token: renewed } as const
   })
-  const deps = { tokenCache, resolveCli, renewCliToken, getScanT3: async () => false }
+  const deps = { tokenCache, resolveCli, renewCliToken }
   const probe = createAntigravityProbe(deps)
   const first = probe(cliAccount, cliContext())
   await vi.waitFor(() => expect(renewCliToken).toHaveBeenCalledTimes(1))
-  expect(resolveCli).toHaveBeenCalledWith({ scanT3: false })
+  expect(resolveCli).toHaveBeenCalledWith()
   const next = createAntigravityProbe(deps)(cliAccount, cliContext())
   const controller = new AbortController()
   const canceled = probe({ ...cliAccount, credentialPaths: ['other-synthetic-account'] },

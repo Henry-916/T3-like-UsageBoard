@@ -48,11 +48,16 @@ const usageApi: UsageApi = {
     ipcRenderer.on(usageChannels.updateStateChanged, handler)
     return () => ipcRenderer.removeListener(usageChannels.updateStateChanged, handler)
   },
-  setScanT3: enabled => ipcRenderer.invoke(usageChannels.setScanT3, enabled),
   getUiPreferences: () => ipcRenderer.invoke(usageChannels.preferences),
   saveUiPreferences: changes => ipcRenderer.invoke(usageChannels.savePreferences, changes),
   trayResize: height => ipcRenderer.invoke(usageChannels.trayResize, height),
   trayOpenMain: () => ipcRenderer.invoke(usageChannels.trayOpenMain),
+  trayHide: () => ipcRenderer.invoke(usageChannels.trayHide),
+  onTrayEscape(listener) {
+    const handler = () => listener()
+    ipcRenderer.on(usageChannels.trayEscape, handler)
+    return () => ipcRenderer.removeListener(usageChannels.trayEscape, handler)
+  },
   onUiPreferencesUpdate(listener) {
     const handler = (_event: unknown, preferences: UiPreferences) => listener(preferences)
     ipcRenderer.on(usageChannels.preferencesUpdated, handler)

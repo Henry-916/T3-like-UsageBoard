@@ -1,7 +1,7 @@
 import { Clock3, Gauge, Ticket, TrendingDown, TrendingUp, TriangleAlert } from 'lucide-react'
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState,
   type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
-import type { ConsumeResetCreditOutcome, LimitsReport } from '../../shared/limitsTypes'
+import type { AccountView, ConsumeResetCreditOutcome, LimitsReport } from '../../shared/limitsTypes'
 import type { UsageProviderKind } from '../../shared/types'
 import { poolUsageLimits, type PooledLimitAccount, type PooledLimitWindow } from '../../shared/usageLimits'
 import {
@@ -9,6 +9,7 @@ import {
   resetBadgeDuration, resetCreditText, resetDetailTime, visibleLimitIssues
 } from '../limitsPresentation'
 import { providerInfo } from '../usagePresentation'
+import { accountSwitchErrorMessage, SwitchAccountConfirmation } from './AccountsDialog'
 import { ProviderMark } from './ProviderMark'
 import { UsageDialog } from './UsageDialog'
 import '../styles/limits.css'
@@ -32,6 +33,18 @@ const limitsProviders = ['codex', 'claude', 'opencode', 'antigravity'] as const
 const segmentKey = (pool: PooledLimitWindow, account: PooledLimitAccount) =>
   JSON.stringify([pool.provider, pool.kind, pool.windowId, account.id])
 
+// A provider's pill row and every window's segment row share this one account order,
+// so a member missing from a window still keeps its column as an inert placeholder.
+function accountColumns(windows: PooledLimitWindow[]): PooledLimitAccount[] {
+  const accounts = new Map<string, PooledLimitAccount>()
+  for (const pool of windows) {
+    for (const account of pool.accounts) if (!accounts.has(account.id)) accounts.set(account.id, account)
+  }
+  return [...accounts.values()].sort((a, b) =>
+    Number(Boolean(b.current)) - Number(Boolean(a.current)) ||
+    a.displayName.localeCompare(b.displayName, 'zh-CN') || a.id.localeCompare(b.id))
+}
+
 export function LimitsView({ report, hiddenProviders, loading, refreshing, failed, onRefresh, onReport }: {
   report: LimitsReport | null
   hiddenProviders: ReadonlySet<UsageProviderKind>
@@ -50,7 +63,9 @@ export function LimitsView({ report, hiddenProviders, loading, refreshing, faile
   const pools = useMemo(() => poolUsageLimits(accounts ?? [], now), [accounts, now])
   const sections = limitsProviders.filter((provider) => !hiddenProviders.has(provider)).map((provider) => ({
     provider, windows: pools.filter((pool) => pool.provider === provider && pool.accounts.length > 0)
-  })).filter((section) => section.windows.length > 0)
+  })).filter((section) => section.windows.length > 0).map((section) => ({
+    ...section, accounts: accountColumns(section.windows)
+  }))
   const issues = visibleLimitIssues(report?.issues, hiddenProviders)
 
   const viewRef = useRef<HTMLElement>(null)
@@ -69,6 +84,9 @@ export function LimitsView({ report, hiddenProviders, loading, refreshing, faile
   const [redeeming, setRedeeming] = useState<ReadonlySet<string>>(() => new Set())
   const pending = useRef(new Set<string>())
   const [feedback, setFeedback] = useState<Feedback | null>(null)
+  const [switchTarget, setSwitchTarget] = useState<AccountView | null>(null)
+  const [switchBusy, setSwitchBusy] = useState(false)
+  const [switchError, setSwitchError] = useState('')
   const detail = selection && findSegment(sections, selection.key)
   const hasDetail = Boolean(detail)
 
@@ -217,6 +235,21 @@ export function LimitsView({ report, hiddenProviders, loading, refreshing, faile
     }
   }
 
+  async function confirmSwitch() {
+    if (!switchTarget || switchBusy) return
+    setSwitchBusy(true)
+    setSwitchError('')
+    try {
+      await window.usageApi.switchAccount(switchTarget.id)
+      setSwitchTarget(null)
+      onRefresh()
+    } catch (error) {
+      setSwitchError(accountSwitchErrorMessage(error))
+    } finally {
+      setSwitchBusy(false)
+    }
+  }
+
   function handleEscape(event: KeyboardEvent) {
     if (event.key !== 'Escape' || !popoverRef.current?.matches(':popover-open')) return
     event.preventDefault()
@@ -291,12 +324,28 @@ export function LimitsView({ report, hiddenProviders, loading, refreshing, faile
       ) : !failed && issues.length === 0 && <p className="view-placeholder">暂无可用额度</p>)}
       {sections.map((section) => (
         <section key={section.provider} aria-labelledby={`limits-${section.provider}`} className="limits-provider">
-          <h2 id={`limits-${section.provider}`} className="limits-provider-heading">
-            <ProviderMark provider={section.provider} className="size-4" />
-            {providerInfo[section.provider].label}
-          </h2>
+          <div className="limits-provider-header">
+            <h2 id={`limits-${section.provider}`} className="limits-provider-heading">
+              <ProviderMark provider={section.provider} className="size-4" />
+              {providerInfo[section.provider].label}
+            </h2>
+            <div className="limit-account-pills" role="group" aria-label="账号"
+              style={{ gridTemplateColumns: `repeat(${section.accounts.length}, minmax(0, 1fr))` }}>
+              {section.accounts.map((account) => (
+                <LimitAccountPill key={account.id} account={account} provider={section.provider} onSwitch={() => {
+                  setSwitchError('')
+                  setSwitchTarget({
+                    id: account.id, provider: section.provider, displayName: account.displayName,
+                    origin: account.origin, enabled: true, current: account.current, canSwitch: account.canSwitch,
+                    hasCredential: true
+                  })
+                }} />
+              ))}
+            </div>
+          </div>
           {section.windows.map((pool) => (
-            <LimitWindowCard key={`${pool.kind}/${pool.windowId}`} pool={pool} now={now} interaction={interaction} />
+            <LimitWindowCard key={`${pool.kind}/${pool.windowId}`} pool={pool} now={now} interaction={interaction}
+              columns={section.accounts} />
           ))}
           {section.provider === 'codex' && <div role="status" className={feedback ? 'limit-reset-feedback' : 'sr-only'}
             data-error={Boolean(feedback?.error)}>{feedback?.message}</div>}
@@ -338,6 +387,10 @@ export function LimitsView({ report, hiddenProviders, loading, refreshing, faile
           </div>
         </UsageDialog>
       )}
+      {switchTarget && (
+        <SwitchAccountConfirmation account={switchTarget} busy={switchBusy} error={switchError}
+          onCancel={() => { setSwitchTarget(null); setSwitchError('') }} onConfirm={() => void confirmSwitch()} />
+      )}
     </section>
   )
 }
@@ -363,10 +416,16 @@ function findSegment(sections: { windows: PooledLimitWindow[] }[], key: string) 
   return null
 }
 
-function LimitWindowCard({ pool, now, interaction }: { pool: PooledLimitWindow; now: number; interaction: SegmentInteraction }) {
+function LimitWindowCard({ pool, now, interaction, columns }: {
+  pool: PooledLimitWindow
+  now: number
+  interaction: SegmentInteraction
+  columns: PooledLimitAccount[]
+}) {
   const titleId = useId()
   const next = pool.nextReset
   const showRecovery = pool.accounts.length > 1 && next && next.recoveryPercent > 0 && Date.parse(next.at) > now
+  const shown = new Map(pool.accounts.map((account) => [account.id, account]))
   return (
     <article className="limit-window" aria-labelledby={titleId} style={{ '--limit-color': providerInfo[pool.provider].color } as CSSProperties}>
       <div className="limit-summary">
@@ -380,13 +439,40 @@ function LimitWindowCard({ pool, now, interaction }: { pool: PooledLimitWindow; 
           <span aria-hidden="true">↻ </span><span className="sr-only">下次重置恢复</span>+{Math.round(next.recoveryPercent)}%
         </span>}
       </div>
-      <div className="limit-accounts" style={{ gridTemplateColumns: `repeat(${pool.accounts.length}, minmax(0, 1fr))` }}>
-        {pool.accounts.map((account) => (
-          <LimitAccountSegment key={account.id} account={account} now={now} provider={pool.provider}
-            accountKey={segmentKey(pool, account)} accountCount={pool.accounts.length} interaction={interaction} />
-        ))}
+      <div className="limit-accounts" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }}>
+        {columns.map((column) => {
+          const account = shown.get(column.id)
+          return account
+            ? <LimitAccountSegment key={column.id} account={account} now={now} provider={pool.provider}
+              accountKey={segmentKey(pool, account)} accountCount={pool.accounts.length} interaction={interaction} />
+            : <span key={column.id} className="limit-account-slot" aria-hidden="true" />
+        })}
       </div>
     </article>
+  )
+}
+
+function LimitAccountPill({ account, provider, onSwitch }: {
+  account: PooledLimitAccount
+  provider: UsageProviderKind
+  onSwitch: () => void
+}) {
+  const switchable = !account.current && account.canSwitch && (provider === 'codex' || provider === 'antigravity')
+  const name = <span className="limit-pill-name">{account.displayName}</span>
+  if (switchable) {
+    return (
+      <button type="button" className="limit-account-pill" data-switchable="true"
+        title={`切换到 ${account.displayName}`} onClick={onSwitch}>
+        {name}
+        <span className="limit-pill-hint" aria-hidden="true">切换</span>
+      </button>
+    )
+  }
+  return (
+    <span className="limit-account-pill" data-current={account.current ? 'true' : undefined} title={account.displayName}>
+      {name}
+      {account.current && <span className="limit-pill-current">当前</span>}
+    </span>
   )
 }
 
@@ -453,8 +539,7 @@ function LimitAccountSegment({ account, now, provider, accountKey, accountCount,
       </span>
       {tick && <span className="limit-pace-tick" aria-hidden="true" />}
       <span className="limit-segment-content" aria-hidden="true">
-        <span className="limit-account-name" title={account.displayName}>{account.displayName}</span>
-        {accountCount > 1 && <strong className="limit-account-percent">{Math.round(remaining)}%</strong>}
+        <strong className="limit-account-percent">{Math.round(remaining)}%</strong>
         {(reset || credits > 0 || account.stale) && <span className="limit-badge">
           {reset && <span className="limit-badge-time">{reset}</span>}
           {credits > 0 && <>

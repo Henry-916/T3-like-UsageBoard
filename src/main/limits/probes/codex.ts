@@ -54,7 +54,7 @@ function window(id: string, raw: unknown, fallbackMins: number, cli: boolean): L
   const windowDurationMins = minutes && minutes > 0 ? minutes : fallbackMins
   const kind = windowDurationMins >= MONTH ? 'monthly' : windowDurationMins >= WEEK ? 'weekly' : 'session'
   const resetsAt = epoch(cli ? row?.resetsAt : row?.reset_at)
-  return { id, kind, label: kind === 'monthly' ? 'Monthly' : kind === 'weekly' ? 'Weekly' : 'Session',
+  return { id, kind, label: kind === 'monthly' ? 'Monthly' : kind === 'weekly' ? 'Weekly' : '5-Hour',
     usedPercent: clamp(used), windowDurationMins, ...(resetsAt ? { resetsAt } : {}) }
 }
 
