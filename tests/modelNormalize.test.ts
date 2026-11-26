@@ -19,4 +19,14 @@ describe("normalizeModelId", () => {
     expect(normalizeModelId("codex", "gpt-5-low-high-medium")).toBe("gpt-5-low");
     expect(normalizeModelId("claude", "claude-sonnet-4-5-20250929")).toBe("claude-sonnet-4-5-20250929");
   });
+
+  it.each([
+    [" CPA/ gemini-3.8-flash-high ", "cpa/gemini-3.8-flash"],
+    ["cpa/claude-opus-5-thinking-high", "cpa/claude-opus-5"],
+    ["OpenRouter/Google/Gemini-low-high-medium", "openrouter/Google/Gemini-low"],
+    ["CPA/-high", "cpa/-high"],
+    ["CPA/gemini-pro-orchestrator-neon", "cpa/gemini-pro-orchestrator-neon"],
+  ])("normalizes qualified model %s without remapping the route", (input, expected) => {
+    expect(normalizeModelId("antigravity", input)).toBe(expected);
+  });
 });

@@ -34,6 +34,18 @@ async function read(rows: object[], rolloutName?: string) {
   }
 }
 
+test.each([
+  [undefined, "test", "test"],
+  [" OpenAI ", "test", "test"],
+  [" CPA ", "test", "cpa/test"],
+  ["cpa", "CPA/Test", "cpa/Test"],
+  ["openrouter", "google/test", "openrouter/google/test"],
+])("applies the session model provider %s to %s", async (model_provider, model, expected) => {
+  expect(await read([
+    meta({ model_provider }), context(model), snapshot(1, tokens(2, 1)),
+  ])).toMatchObject([{ model: expected }]);
+});
+
 test("validates cumulative deltas, ignores repeats, and rebases zeroed snapshots", async () => {
   const last = tokens(10, 4, {
     cached_input_tokens: 4, cache_write_input_tokens: 2, reasoning_output_tokens: 3,

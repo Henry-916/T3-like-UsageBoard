@@ -38,7 +38,7 @@
   - `Codex`：调用 `codex -c cli_auth_credentials_store="file" app-server` 在隔离 `profiles/<id>/`（`CODEX_HOME`）完成 ChatGPT OAuth；
   - `Claude Code`：保留宿主浏览器及用户临时目录环境变量、注入 `BROWSER: '__USAGE_DASHBOARD_NO_BROWSER__'` 抑制 CLI 自动打开浏览器并放行 `claude.ai` / `claude.com` / `platform.claude.com` / `console.anthropic.com`，通过 `CLAUDE_CONFIG_DIR` 隔离完成 `claude auth login --claudeai`；
   - `OpenCode`：应用内输入 Go API Key 并经 `safeStorage` 加密存储。
-- **模型归一化与计价**：先执行 `normalizeModelId`（剥离思考强度后缀并映射 Antigravity 路由模型），再查 `priceOverrides` 或 `LiteLLM (24h 缓存 + 离线兜底)` 单价——有单价且列表价 `> 0` 时按四分类比例折算 `providerReportedCost`（无上报总价则按模型单价），**凡查不到单价的模型（除明确上报 `$0` 的免费模型外）一律忽略无法拆分的笼统上报金额并标记为 `unpriced`（`未定价`）**；美元统一输出 `US$`。
+- **模型归一化与计价**：OpenCode 与使用非默认 `model_provider`（非 `openai`）的 Codex 会话按小写渠道前缀 `<provider>/<model>`（经 [modelNormalize.ts](../src/shared/modelNormalize.ts) `qualifyModelId` 防重前缀）拆分聚合桶、明细展示与自定义价格；`normalizeModelId` 仅对 `/` 右侧剥离思考强度后缀（[scanCache.ts](../src/main/usage/scanCache.ts) 缓存版本 `v3`）。[opencodePricing.ts](../src/main/usage/opencodePricing.ts) 通过脱敏投影解析器只读热加载本机 `opencode.json` / `opencode.jsonc`（对象式与数组阶梯式 `cost`）及 OpenCode `models.json` 缓存（按 `(mtimeMs, size)` 指纹自动失效）；[pricing.ts](../src/main/usage/pricing.ts) 严格按渠道隔离计价，优先级为 `UsageBoard priceOverrides > OpenCode 用户配置单价 > OpenCode models.json 缓存 > LiteLLM (24h 缓存 + 离线兜底)`（前两项用户显式单价覆盖日志旧 `reportedCostUsd`；含 `<provider>/` 模型仅白名单官方按量网关映射 LiteLLM，绝不对未知/中转渠道剥离前缀套用裸模型单价）；[aggregation.ts](../src/main/usage/aggregation.ts) `modelAliases` 支持小写回退；**凡查不到单价的模型（除明确上报 `$0` 的免费模型外）一律忽略无法拆分的笼统上报金额并标记为 `unpriced`（`未定价`）**；美元统一输出 `US$`。
 
 ### 2.3 限制页、托盘额度小面板与特殊交互
 - **主面板「限制」页顶部对齐账号胶囊栏与额度条**：
@@ -65,7 +65,7 @@
 
 1. **防御性保护 `~/.t3`**：尽管已移除所有 T3 运行时读取逻辑，[cli.ts](../src/main/limits/probes/cli.ts)（`safeCliDirectory` / `resolveAgyCli`）与 [switchAccount.ts](../src/main/accounts/switchAccount.ts)（`assertSwitchPath`）中拒绝写入或在 `~/.t3` 下拉起外部 CLI 的物理路径安全护栏仍须保留；严禁写入、修改或删除 `~/.t3` 下任何文件。
 2. **保护参考原图**：`docs/references/` 下所有参考截图始终保留无损原图，不得有损压缩或改动。
-3. **零实弹兑换与脱敏**：任何自动化测试、人工脚本或冷启动验收均**禁止**触发真实的 Codex 重置券兑换；账号邮箱仅在应用 UI 显示，不得写进终端输出、日志、文档、工单或测试夹具；凭证和授权码不得泄露。
+3. **零实弹兑换、配置投影与脱敏**：任何自动化测试、人工脚本或冷启动验收均**禁止**触发真实的 Codex 重置券兑换；读取 `opencode.json` / `opencode.jsonc` 时仅投影提取模型 ID 与 `cost` 数值，严禁解码、缓存、打印或传递 `apiKey`、`headers`、`baseURL`、`options`；账号邮箱仅在应用 UI 显示，不得写进终端输出、日志、文档、工单或测试夹具；凭证和授权码不得泄露。
 
 ---
 
@@ -81,5 +81,6 @@
 | 006 | `v0.4.1` | [006-v0.4.1-ux-refinements.md](specs/006-v0.4.1-ux-refinements.md) | 检查更新微动画与固定顶栏胶囊、登录链接自动复制与免自动弹窗、提供方图标下拉 |
 | 007 | `v0.5.0` | [007-v0.5.0-rebrand-tray-panel-account-switch.md](specs/007-v0.5.0-rebrand-tray-panel-account-switch.md) | 更名为 T3-like UsageBoard 与新 Logo、userData 迁移、分类条重设计、邮箱归并与快捷切号、托盘额度小面板 |
 | 008 | `v0.5.1` | [008-v0.5.1-bundled-serif-font.md](specs/008-v0.5.1-bundled-serif-font.md) | 内置思源宋体可变字体、清空 T3 运行时代码、未定价不估算与 4 段费用条、当前账号置顶、限制页胶囊切号与托盘小面板精修 |
+| 009 | `v0.5.2` | [009-v0.5.2-provider-qualified-models-and-opencode-pricing.md](specs/009-v0.5.2-provider-qualified-models-and-opencode-pricing.md) | 按上游 Provider 拆分模型统计（`<provider>/<model>`）、只读热加载 OpenCode 本地与目录定价、严格渠道隔离计价 |
 
 > 后续每轮新需求在 `docs/specs/` 下按 `NNN-vX.Y.Z-<slug>.md` 递增新建；合入并完成版本发布后，如改变了全局默认行为，同步更新本页对应条目。

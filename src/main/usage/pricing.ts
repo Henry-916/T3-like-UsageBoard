@@ -60,6 +60,7 @@ function speedRates(entry: Record<string, unknown>, standard: TokenRates, suffix
 }
 
 const firstParty = new Set(["anthropic", "deepseek", "gemini", "meta", "mistral", "openai", "xai"]);
+const inferredBareKeys = new WeakMap<RateTable, ReadonlySet<string>>();
 
 function mergeSpeeds(a: SpeedRates, b: SpeedRates): SpeedRates | null {
   const same = (x: TokenRates, y: TokenRates) =>
@@ -120,7 +121,14 @@ export function parseRateTable(document: unknown): RateTable {
       candidates.set(alias, { rate: mergeRates(held.rate, rate), preferred });
     }
   }
-  for (const [alias, { rate }] of candidates) if (rate) table.set(alias, rate);
+  const inferred = new Set<string>();
+  for (const [alias, { rate }] of candidates) {
+    if (rate) {
+      table.set(alias, rate);
+      inferred.add(alias);
+    }
+  }
+  inferredBareKeys.set(table, inferred);
   return table;
 }
 
@@ -146,13 +154,54 @@ export function lookupRate(table: RateTable, model: string): ModelRate | undefin
   return unpriceable.has(key.slice(key.lastIndexOf("/") + 1)) ? undefined : table.get(key);
 }
 
+// An empty prefix permits an explicit bare LiteLLM entry for these gateways only.
+const gatewayPrefixes = new Map<string, readonly string[]>([
+  ["opencode-go", ["opencode_go/"]], ["opencode", ["opencode/"]],
+  ["google", ["gemini/"]], ["google-vertex", ["vertex_ai/"]],
+  ...["alibaba-cn", "alibaba", "dashscope"].map(provider =>
+    [provider, ["dashscope/", "qwen_ai_platform/", "qwencloud/"]] as const),
+  ["openai", ["openai/", ""]],
+  ["anthropic", ["anthropic/", "anthropic.", ""]], ["claude-code", ["anthropic/", "anthropic.", ""]],
+  ["deepseek", ["deepseek/", ""]], ["xai", ["xai/", ""]], ["mistral", ["mistral/", ""]],
+  ["azure", ["azure/", "azure_ai/"]],
+  ["amazon-bedrock", ["bedrock/", "bedrock_mantle/"]], ["bedrock", ["bedrock/", "bedrock_mantle/"]],
+  ["openrouter", ["openrouter/"]], ["github-copilot", ["github_copilot/"]],
+  ["groq", ["groq/"]], ["perplexity", ["perplexity/"]], ["deepinfra", ["deepinfra/"]],
+  ["togetherai", ["together_ai/"]], ["fireworks-ai", ["fireworks_ai/"]],
+  ["nebius", ["nebius/"]], ["novita", ["novita/"]], ["baseten", ["baseten/"]],
+]);
+
+function lookupQualifiedRate(table: RateTable, model: string, slash: number): ModelRate | undefined {
+  const rest = model.slice(slash + 1);
+  // Check the model itself too, before adding a dotted prefix such as anthropic.
+  if (!rest || unpriceable.has(rest.split("[", 1)[0].split("/").at(-1)!)) return undefined;
+  for (const prefix of gatewayPrefixes.get(model.slice(0, slash)) ?? []) {
+    // Do not reimport a different gateway's price through a generated bare alias.
+    if (!prefix && (rest.includes("/") || inferredBareKeys.get(table)?.has(rest.split("[", 1)[0]))) continue;
+    const rate = lookupRate(table, prefix + rest);
+    if (rate) return rate;
+  }
+  return undefined;
+}
+
 function ratesAt(rate: ModelRate, speed: UsageRecord["speed"], totals: UsageRecord["totals"]): TokenRates {
   const prompt = totals.uncachedInputTokens + totals.cachedInputTokens + totals.cacheCreationTokens;
   const tier = rate.tiers.find(({ threshold }) => prompt > threshold)?.rates;
   return tier?.[speed] ?? rate[speed] ?? tier?.standard ?? rate.standard;
 }
 
-type PricedRecord = Pick<UsageRecord, "model" | "rateModel" | "totals" | "cacheCreation1hTokens" | "speed" | "reportedCostUsd">;
+type PricedRecord = Pick<UsageRecord, "model" | "rateModel" | "totals" | "cacheCreation1hTokens" | "speed" | "reportedCostUsd"> &
+  Partial<Pick<UsageRecord, "provider">>;
+export interface OpenCodePriceTables {
+  readonly userRates: RateTable;
+  readonly catalogRates: RateTable;
+}
+
+export interface UsagePriceContext {
+  readonly overrides?: RateTable;
+  readonly opencodeUserRates?: RateTable;
+  readonly opencodeCatalogRates?: RateTable;
+}
 
 function categoryCosts(record: PricedRecord, rates: TokenRates): UsageCategoryCost {
   const { totals } = record;
@@ -165,17 +214,23 @@ function categoryCosts(record: PricedRecord, rates: TokenRates): UsageCategoryCo
   };
 }
 
-export function priceUsage(table: RateTable, record: PricedRecord, overrides?: RateTable): {
+export function priceUsage(table: RateTable, record: PricedRecord, context?: RateTable | UsagePriceContext): {
   costUsd: number;
   costSource: UsageCostSource;
   categoryCostUsd: UsageCategoryCost | null;
   speedPremiumUsd: number;
   cacheSavingsUsd: number;
 } {
-  const reported = amount(record.reportedCostUsd);
-  const rate = overrides?.get(keyFor(record.model)) ??
-    (record.rateModel === undefined ? undefined : lookupRate(table, record.rateModel)) ??
-    lookupRate(table, record.model);
+  const options = context && "get" in context ? { overrides: context } : context;
+  const key = keyFor(record.model);
+  const slash = key.indexOf("/");
+  const explicitRate = options?.overrides?.get(key) ??
+    (record.provider === "opencode" || slash >= 0 ? options?.opencodeUserRates?.get(key) : undefined);
+  const reported = explicitRate ? null : amount(record.reportedCostUsd);
+  const rate = explicitRate ?? (slash >= 0
+    ? options?.opencodeCatalogRates?.get(key) ?? lookupQualifiedRate(table, key, slash)
+    : (record.rateModel === undefined ? undefined : lookupRate(table, record.rateModel)) ??
+      lookupRate(table, record.model));
   if (!rate) {
     // A provider total that cannot be split across token categories is not an estimate.
     if (reported === 0) {

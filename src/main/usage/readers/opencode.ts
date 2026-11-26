@@ -2,6 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { qualifyModelId } from "../../../shared/modelNormalize";
 import { tokenCount, totalTokens, type UsageRecord } from "../../../shared/types";
 
 function object(value: unknown): Record<string, unknown> {
@@ -11,7 +12,6 @@ function object(value: unknown): Record<string, unknown> {
 }
 
 const text = (value: unknown) => typeof value === "string" ? value : "";
-const LITELLM_PREFIXES = new Map([["opencode-go", "opencode_go"]]);
 const OPENCODE_GATEWAYS = new Set(["opencode", "opencode-go"]);
 const MESSAGE_PAGE_SIZE = 64;
 
@@ -30,10 +30,10 @@ function parseOpenCodeMessage(
   const usage = object(message.tokens);
   const cache = object(usage.cache);
   const modelReference = object(message.model);
-  const model = text(modelReference.id) || text(modelReference.modelID) || text(message.modelID);
-  const providerId = text(modelReference.providerID) || text(message.providerID);
+  const rawModel = (text(modelReference.id) || text(modelReference.modelID) || text(message.modelID)).trim();
+  const providerId = (text(modelReference.providerID) || text(message.providerID)).trim().toLowerCase();
   const timestampMs = object(message.time).created ?? fallback.timestampMs;
-  if (!model || typeof timestampMs !== "number" || !Number.isFinite(timestampMs)) return null;
+  if (!rawModel || typeof timestampMs !== "number" || !Number.isFinite(timestampMs)) return null;
   const reasoningTokens = tokenCount(usage.reasoning);
   const totals = {
     uncachedInputTokens: tokenCount(usage.input),
@@ -45,13 +45,13 @@ function parseOpenCodeMessage(
   if (totalTokens(totals) === 0) return null;
   const id = fallback.id || text(message.id);
   const cost = message.cost;
-  const prefix = LITELLM_PREFIXES.get(providerId);
-  const free = OPENCODE_GATEWAYS.has(providerId) && model.endsWith("-free");
+  const model = qualifyModelId(providerId, rawModel);
+  const bareModel = providerId ? model.slice(providerId.length + 1) : model;
+  const free = OPENCODE_GATEWAYS.has(providerId) && bareModel.endsWith("-free");
   return {
     provider: "opencode",
     timestampMs,
     model,
-    ...(prefix !== undefined && !model.includes("/") ? { rateModel: `${prefix}/${model}` } : {}),
     sessionId: fallback.sessionId || text(message.sessionID),
     totals,
     // Zero is only authoritative for OpenCode's own free gateway models.

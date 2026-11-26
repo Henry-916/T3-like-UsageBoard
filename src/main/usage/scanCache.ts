@@ -13,7 +13,7 @@ const fileEntry = z.object({
 })
 export type ScanCacheEntry = z.infer<typeof fileEntry>
 const cacheFile = 'scan-cache.json'
-const cacheVersion = 2
+const cacheVersion = 3
 
 export async function readScanCache(userData: string): Promise<Map<string, ScanCacheEntry>> {
   try {

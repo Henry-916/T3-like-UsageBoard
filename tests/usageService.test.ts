@@ -66,13 +66,57 @@ test.skipIf(!process.env.USAGE_SMOKE_SUMMARY)('exports real local usage into an 
     await writeFile(output, JSON.stringify(summary, null, 2))
     expect(summary.buckets.length).toBeGreaterThan(0)
     expect(summary.buckets.every(bucket => Number.isFinite(bucket.costUsd) && bucket.records > 0)).toBe(true)
-    console.log('UsageSummary smoke:', JSON.stringify({
-      buckets: summary.buckets.length, pricing: summary.pricing.status, sources: summary.sources, scanDurationMs: summary.scanDurationMs
-    }))
   } finally {
     await rm(userData, { recursive: true, force: true })
   }
 }, 180_000)
+
+test('reprices qualified OpenCode history from edited config without rescanning transcripts', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'usage-live-pricing-'))
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'))
+  try {
+    const userData = join(home, 'app')
+    const openCode = join(home, 'opencode')
+    const messages = join(openCode, 'storage', 'message')
+    const configDir = join(home, '.config', 'opencode')
+    await mkdir(messages, { recursive: true })
+    await mkdir(configDir, { recursive: true })
+    const now = Date.now()
+    const day = new Date(now).toISOString().slice(0, 10)
+    for (const providerID of ['CPA', 'other']) {
+      await writeFile(join(messages, `${providerID}.json`), JSON.stringify({
+        role: 'assistant', providerID, modelID: 'gpt-5.6-sol',
+        time: { created: now }, tokens: { input: 100 }, cost: 0.5
+      }))
+    }
+    const service = createUsageService({
+      home, env: { OPENCODE_DATA_DIR: openCode }, userData, fallbackRates: resolve('resources/fallback-rates.json')
+    })
+    const query = { sinceDay: day, untilDay: day, timeZone: 'UTC' }
+    const first = await service.getSummary(query)
+    expect(first.buckets).toMatchObject([
+      { model: 'cpa/gpt-5.6-sol', costUsd: 0, costSource: 'unpriced' },
+      { model: 'other/gpt-5.6-sol', costUsd: 0, costSource: 'unpriced' }
+    ])
+    const configPath = join(configDir, 'opencode.jsonc')
+    const writeRates = (input: number) => writeFile(configPath, JSON.stringify({
+      provider: { cpa: { models: { 'gpt-5.6-sol': { cost: { input, output: 4 } } } } }
+    }))
+    await writeRates(2)
+    const priced = await service.getSummary(query)
+    expect(priced.readAt).toBe(first.readAt)
+    expect(priced.buckets).toMatchObject([
+      { model: 'cpa/gpt-5.6-sol', costSource: 'modelPriced' },
+      { model: 'other/gpt-5.6-sol', costUsd: 0, costSource: 'unpriced' }
+    ])
+    expect(priced.buckets[0].costUsd).toBeCloseTo(0.0002, 12)
+    await writeRates(20)
+    expect((await service.getSummary(query)).buckets[0].costUsd).toBeCloseTo(0.002, 12)
+  } finally {
+    fetchMock.mockRestore()
+    await rm(home, { recursive: true, force: true })
+  }
+})
 
 test('scans a directly selected Antigravity conversations directory and keeps anonymous OpenCode usage cached', async () => {
   const home = await mkdtemp(join(tmpdir(), 'usage-direct-'))

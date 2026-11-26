@@ -5,6 +5,7 @@ import { readConfig } from '../configStore'
 import { usageSummaryInputSchema } from '../../shared/types'
 import type { UsageProviderKind, UsageRecord, UsageSource, UsageSummary, UsageSummaryInput } from '../../shared/types'
 import { aggregateUsage, createUsageWindowFilter, mergeUsageCopies } from './aggregation'
+import { loadOpenCodePricing } from './opencodePricing'
 import { loadPricing } from './pricing'
 import { fileFingerprint, readScanCache, writeScanCache } from './scanCache'
 import { mergeAntigravityRecords, scanAntigravityDatabase } from './readers/antigravity'
@@ -189,7 +190,10 @@ export function createUsageService({ userData, fallbackRates, home, env, now = D
         scanInFlight = scan().then(result => { snapshot = result; return result })
           .finally(() => { scanInFlight = undefined })
       }
-      const [result, config] = await Promise.all([refresh ? (scanInFlight ?? snapshot!) : (snapshot ?? scanInFlight!), readConfig(userData)])
+      const [result, config, opencodePricing] = await Promise.all([
+        refresh ? (scanInFlight ?? snapshot!) : (snapshot ?? scanInFlight!), readConfig(userData),
+        loadOpenCodePricing({ home, env })
+      ])
       const filter = createUsageWindowFilter(query)
       const records: UsageRecord[] = []
       const sources = result.sources.map(source => {
@@ -203,7 +207,7 @@ export function createUsageService({ userData, fallbackRates, home, env, now = D
       })
       return {
         readAt: result.readAt, timeZone: query.timeZone, sinceDay: query.sinceDay, untilDay: query.untilDay,
-        buckets: aggregateUsage(records, query, result.pricing, config.priceOverrides, config.modelAliases),
+        buckets: aggregateUsage(records, query, result.pricing, config.priceOverrides, config.modelAliases, opencodePricing),
         sources, pricing: result.pricing.status, scanDurationMs: result.elapsed
       }
     }

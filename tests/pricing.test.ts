@@ -14,7 +14,7 @@ const document = {
     provider_specific_entry: { fast: 2 },
   },
   "reseller/claude-test": { input_cost_per_token: 9, output_cost_per_token: 9 },
-  "free/model": {
+  "opencode/model-free": {
     input_cost_per_token: 0, output_cost_per_token: 0,
     cache_read_input_token_cost: 0, cache_creation_input_token_cost: 0,
   },
@@ -47,14 +47,17 @@ describe("priceUsage", () => {
     expect(priced.speedPremiumUsd).toBeCloseTo(priced.costUsd / 2, 12);
   });
 
-  it("uses provider-reported costs (even zero) before overrides and LiteLLM", () => {
+  it("uses override list prices instead of old reported totals and preserves the free fallback", () => {
     const overrides = createOverrideRateTable({
       "claude-test": { inputCostPerMillionTokens: 4, outputCostPerMillionTokens: 1, cacheReadCostPerMillionTokens: 0 },
     });
     expect(priceUsage(table, record, overrides).costUsd).toBeCloseTo(85e-6, 12);
-    const reported = priceUsage(table, { ...record, reportedCostUsd: 0.5 }, overrides);
-    expect(reported).toMatchObject({ costUsd: 0.5, costSource: "providerReported" });
-    expect(Object.values(reported.categoryCostUsd!).reduce((sum, part) => sum + part, 0)).toBeCloseTo(0.5);
+    for (const reportedCostUsd of [0, 0.5]) {
+      const repriced = priceUsage(table, { ...record, reportedCostUsd }, overrides);
+      expect(repriced.costSource).toBe("modelPriced");
+      expect(repriced.costUsd).toBeCloseTo(85e-6, 12);
+      expect(repriced.categoryCostUsd?.cacheRead).toBe(0);
+    }
     expect(priceUsage(table, { ...record, model: "unknown", reportedCostUsd: 0 }, overrides))
       .toMatchObject({ costUsd: 0, costSource: "providerReported",
         categoryCostUsd: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
@@ -63,10 +66,47 @@ describe("priceUsage", () => {
     });
     expect(priceUsage(table, { ...record, model: "unknown" }, overrides)).toMatchObject({ costSource: "unpriced" });
     // A zero-priced rate cannot split a positive lump-sum report; do not trust it.
-    expect(priceUsage(table, { ...record, model: "free/model", reportedCostUsd: 2 }, overrides)).toMatchObject({
+    expect(priceUsage(table, { ...record, model: "opencode/model-free", reportedCostUsd: 2 }, overrides)).toMatchObject({
       costUsd: 0, costSource: "modelPriced",
       categoryCostUsd: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     });
+  });
+
+  it("prioritizes exact local pricing over gateway rates and scales reported totals only for non-explicit rates", () => {
+    const model = "ALIBABA-CN/qwen";
+    const rates = (input: number) => createOverrideRateTable({
+      [model]: { inputCostPerMillionTokens: input, outputCostPerMillionTokens: input },
+    });
+    const gateway = parseRateTable({ "dashscope/qwen": { input_cost_per_token: 1e-6, output_cost_per_token: 1e-6 } });
+    const ctx = { opencodeCatalogRates: rates(2), opencodeUserRates: rates(3), overrides: rates(4) };
+    const usage = { ...record, model };
+    expect(priceUsage(gateway, usage).costUsd).toBeCloseTo(45e-6, 12);
+    expect(priceUsage(gateway, usage, { opencodeCatalogRates: ctx.opencodeCatalogRates }).costUsd).toBeCloseTo(90e-6, 12);
+    const historical = { ...usage, reportedCostUsd: 0.5 };
+    const catalog = priceUsage(gateway, historical, { opencodeCatalogRates: ctx.opencodeCatalogRates });
+    expect(catalog).toMatchObject({ costUsd: 0.5, costSource: "providerReported" });
+    expect(catalog.categoryCostUsd?.input).toBeCloseTo(0.5 * 10 / 45, 12);
+    const user = priceUsage(gateway, historical, { ...ctx, overrides: undefined });
+    expect(user.costSource).toBe("modelPriced");
+    expect(user.costUsd).toBeCloseTo(135e-6, 12);
+    const overridden = priceUsage(gateway, historical, ctx);
+    expect(overridden.costSource).toBe("modelPriced");
+    expect(overridden.costUsd).toBeCloseTo(180e-6, 12);
+  });
+
+  it("does not leak bare, inferred, or explicitly hinted rates into other channels", () => {
+    const fee = { input_cost_per_token: 1e-6, output_cost_per_token: 1e-6 };
+    const gateway = parseRateTable({
+      "gpt-5.6-sol": fee, "cpa/gpt-5.6-sol": fee, "reseller/third-party": fee,
+      "openrouter/google/gemini-test": fee, "openai/synthetic": fee, "anthropic.opus": fee,
+    });
+    for (const model of ["cpa/gpt-5.6-sol", "openai/third-party", "openai/reseller/third-party", "openai/synthetic", "anthropic/opus"]) {
+      expect(priceUsage(gateway, { ...record, model, rateModel: "gpt-5.6-sol", reportedCostUsd: 0.5 }))
+        .toEqual({ costUsd: 0, costSource: "unpriced", categoryCostUsd: null, speedPremiumUsd: 0, cacheSavingsUsd: 0 });
+    }
+    for (const model of ["openai/gpt-5.6-sol", "openrouter/google/gemini-test"]) {
+      expect(priceUsage(gateway, { ...record, model }).costUsd).toBeCloseTo(45e-6, 12);
+    }
   });
 });
 

@@ -19,6 +19,28 @@ const record = (model: string, overrides: Partial<UsageRecord> = {}): UsageRecor
 });
 
 describe("aggregateUsage", () => {
+  it("isolates same-name OpenCode models unless explicitly aliased, with exact aliases winning", () => {
+    const openCode = { provider: "opencode" as const, reportedCostUsd: 1 };
+    const records = [
+      record("CPA/qwen3.8-flash", openCode),
+      record("alibaba-cn/qwen3.8-flash", openCode),
+    ];
+    const rates = { ...pricing, rates: parseRateTable({
+      "qwen3.8-flash": { input_cost_per_token: 1, output_cost_per_token: 1 },
+      "dashscope/qwen3.8-flash": { input_cost_per_token: 1e-6, output_cost_per_token: 1e-6 },
+    }) };
+    expect(aggregateUsage(records, daily, rates, {}, {})).toMatchObject([
+      { model: "alibaba-cn/qwen3.8-flash", costUsd: 1, costSource: "providerReported" },
+      { model: "cpa/qwen3.8-flash", costUsd: 0, costSource: "unpriced" },
+    ]);
+    const aliases = { "CPA/qwen3.8-flash": "Alibaba-CN/qwen3.8-flash" };
+    expect(aggregateUsage(records, daily, rates, {}, aliases)).toMatchObject([
+      { model: "alibaba-cn/qwen3.8-flash", costUsd: 2, records: 2 },
+    ]);
+    expect(aggregateUsage(records, daily, rates, {}, { ...aliases, "cpa/qwen3.8-flash": "other/model" }))
+      .toMatchObject([{ model: "alibaba-cn/qwen3.8-flash" }, { model: "other/model", costSource: "unpriced" }]);
+  });
+
   it("normalizes effort before transitive aliases and counts distinct sessions", () => {
     const rows = aggregateUsage([
       record("gemini-3.6-flash-high", { rateModel: "original-rate" }),

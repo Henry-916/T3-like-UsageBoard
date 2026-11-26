@@ -1,4 +1,5 @@
 import { basename, resolve } from "node:path";
+import { qualifyModelId } from "../../../shared/modelNormalize";
 import { parseTimestampMs, type UsageRecord } from "../../../shared/types";
 import { asObject, readJsonl } from "../transcriptReader";
 
@@ -145,7 +146,7 @@ export async function readCodexFile(filePath: string): Promise<UsageRecord[]> {
           break;
         }
       }
-      if (typeof payload.model_provider === "string") modelProvider = payload.model_provider;
+      if (typeof payload.model_provider === "string") modelProvider = payload.model_provider.trim().toLowerCase();
       const spawn = asObject(asObject(asObject(payload.source)?.subagent)?.thread_spawn);
       if (typeof payload.forked_from_id === "string" || typeof spawn?.parent_thread_id === "string") {
         forkAnchor = parseTimestampMs(record.timestamp);
@@ -173,7 +174,7 @@ export async function readCodexFile(filePath: string): Promise<UsageRecord[]> {
     if (timestampMs === null || model === "") return;
     const attribution: Attribution = {
       timestampMs,
-      model,
+      model: modelProvider === "openai" ? model : qualifyModelId(modelProvider, model),
       speed,
       // Only a native session and explicit turn/model identify a history lookup.
       ...(!sawThreadSettings && modelProvider === "openai" && sessionId && turnId

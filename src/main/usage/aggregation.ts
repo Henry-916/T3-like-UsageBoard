@@ -8,7 +8,7 @@ import {
   type UsageRecord,
   type UsageSummaryInput,
 } from "../../shared/types";
-import { createOverrideRateTable, priceUsage, type PricingResult } from "./pricing";
+import { createOverrideRateTable, priceUsage, type OpenCodePriceTables, type PricingResult } from "./pricing";
 
 const HOUR_MS = 3_600_000;
 const SLOT_MS = 900_000;
@@ -48,20 +48,31 @@ export function createUsageWindowFilter(query: UsageSummaryInput): (timestampMs:
 }
 
 function resolveModelAliases(aliases: ModelAliases): Map<string, string | null> {
+  const keys = Object.keys(aliases);
+  const folded = new Map<string, string>();
+  for (const key of keys) {
+    const lower = key.toLowerCase();
+    if (!folded.has(lower) || key === lower) folded.set(lower, key);
+  }
+  const aliasKey = (model: string) =>
+    Object.hasOwn(aliases, model) ? model : folded.get(model.toLowerCase());
   const resolved = new Map<string, string | null>();
-  for (const model of Object.keys(aliases)) {
+  for (const model of keys) {
     if (resolved.has(model)) continue;
     const path: string[] = [];
     let target = model;
-    while (Object.hasOwn(aliases, target) && !resolved.has(target)) {
-      path.push(target);
+    let key = aliasKey(target);
+    while (key !== undefined && !resolved.has(key)) {
+      path.push(key);
       // Null marks both active walks and paths that terminate in cycles.
-      resolved.set(target, null);
-      target = aliases[target];
+      resolved.set(key, null);
+      target = aliases[key];
+      key = aliasKey(target);
     }
-    const terminal = Object.hasOwn(aliases, target) ? (resolved.get(target) ?? null) : target;
+    const terminal = key === undefined ? target : (resolved.get(key) ?? null);
     for (const alias of path) resolved.set(alias, terminal);
   }
+  for (const [lower, key] of folded) if (!resolved.has(lower)) resolved.set(lower, resolved.get(key) ?? null);
   return resolved;
 }
 
@@ -99,9 +110,14 @@ export function aggregateUsage(
   pricing: PricingResult,
   overrides: PriceOverrides,
   aliases: ModelAliases,
+  opencodePricing?: OpenCodePriceTables,
 ): UsageBucket[] {
   const window = createUsageWindow(query);
-  const rateOverrides = createOverrideRateTable(overrides);
+  const priceContext = {
+    overrides: createOverrideRateTable(overrides),
+    opencodeUserRates: opencodePricing?.userRates,
+    opencodeCatalogRates: opencodePricing?.catalogRates,
+  };
   const aliasTargets = resolveModelAliases(aliases);
   const buckets = new Map<string, MutableBucket>();
   const keyed = new Map<string, UsageRecord>();
@@ -109,7 +125,10 @@ export function aggregateUsage(
   function accumulate(input: UsageRecord) {
     if (!window.includes(input.timestampMs)) return;
     const normalized = normalizeModelId(input.provider, input.model);
-    const model = aliasTargets.get(normalized) ?? normalized;
+    const target = aliasTargets.get(normalized);
+    const alias = target === undefined ? aliasTargets.get(normalized.toLowerCase()) : target;
+    const model = alias !== null && alias !== undefined && alias.includes("/")
+      ? normalizeModelId(input.provider, alias) : (alias ?? normalized);
     // An explicit alias reprices at its target, not at the original record's rate hint.
     const record = { ...input, model, rateModel: model === normalized ? input.rateModel : undefined };
     const day = window.dayAt(record.timestampMs);
@@ -126,7 +145,7 @@ export function aggregateUsage(
       };
       buckets.set(key, bucket);
     }
-    const priced = priceUsage(pricing.rates, record, rateOverrides);
+    const priced = priceUsage(pricing.rates, record, priceContext);
     const { totals } = bucket;
     totals.uncachedInputTokens += record.totals.uncachedInputTokens;
     totals.cachedInputTokens += record.totals.cachedInputTokens;
