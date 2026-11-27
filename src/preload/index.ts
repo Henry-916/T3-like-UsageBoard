@@ -52,6 +52,8 @@ const usageApi: UsageApi = {
   },
   getUiPreferences: () => ipcRenderer.invoke(usageChannels.preferences),
   saveUiPreferences: changes => ipcRenderer.invoke(usageChannels.savePreferences, changes),
+  getWhatsNew: () => ipcRenderer.invoke(usageChannels.whatsNew),
+  markWhatsNewSeen: () => ipcRenderer.invoke(usageChannels.markWhatsNewSeen),
   trayResize: height => ipcRenderer.invoke(usageChannels.trayResize, height),
   trayOpenMain: () => ipcRenderer.invoke(usageChannels.trayOpenMain),
   trayHide: () => ipcRenderer.invoke(usageChannels.trayHide),

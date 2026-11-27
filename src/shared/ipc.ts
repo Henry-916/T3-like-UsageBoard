@@ -38,6 +38,8 @@ export const usageChannels = {
   preferences: 'usage:get-ui-preferences',
   savePreferences: 'usage:save-ui-preferences',
   preferencesUpdated: 'usage:ui-preferences-updated',
+  whatsNew: 'usage:whats-new',
+  markWhatsNewSeen: 'usage:mark-whats-new-seen',
   trayResize: 'usage:tray-resize',
   trayOpenMain: 'usage:tray-open-main',
   trayEscape: 'usage:tray-escape',
@@ -81,6 +83,8 @@ export interface UsageApi {
   getUiPreferences(): Promise<UiPreferences>
   saveUiPreferences(changes: UiPreferences): Promise<void>
   onUiPreferencesUpdate(listener: (preferences: UiPreferences) => void): () => void
+  getWhatsNew(): Promise<{ version: string; shouldShow: boolean }>
+  markWhatsNewSeen(): Promise<void>
   trayResize(height: number): Promise<void>
   trayOpenMain(): Promise<void>
   trayHide(): Promise<void>

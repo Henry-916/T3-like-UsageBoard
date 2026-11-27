@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { UsageApi } from '../shared/ipc'
+import { latestReleaseNote, type ReleaseNote } from '../shared/releaseNotes'
 import { modelPriceKey, type UsageProviderKind } from '../shared/types'
+import { APP_VERSION } from '../shared/version'
 import { AccountsDialog } from './components/AccountsDialog'
 import { CostTokenView } from './components/CostTokenView'
 import { LimitsView } from './components/LimitsView'
 import { PriceOverridesDialog } from './components/PriceOverridesDialog'
+import { ReleaseNotesDialog } from './components/ReleaseNotesDialog'
 import { TopBar } from './components/TopBar'
 import { TrayPanel } from './components/TrayPanel'
 import { UsageModelDialog } from './components/UsageModelDialog'
@@ -19,7 +22,8 @@ declare global {
   interface Window { usageApi: UsageApi }
 }
 
-type Modal = { kind: 'model'; model: UsageModel } | { kind: 'prices'; model?: string } | { kind: 'accounts' }
+type Modal = { kind: 'model'; model: UsageModel } | { kind: 'prices'; model?: string } | { kind: 'accounts' } |
+  { kind: 'whatsNew'; note: ReleaseNote }
 
 function App() {
   const [range, setRange] = useState<UsageRange>('30d')
@@ -30,6 +34,9 @@ function App() {
   const [modal, setModal] = useState<Modal | null>(null)
   const [windowError, setWindowError] = useState('')
   const [maximized, setMaximized] = useState(false)
+  const [autoReleaseNotes, setAutoReleaseNotes] = useState(false)
+  const [windowVisible, setWindowVisible] = useState(() => document.visibilityState !== 'hidden')
+  const autoReleaseShown = useRef(false)
   const maximizedRevision = useRef(0)
   const { summary, query, pending, refreshing, failed, refresh, reprice, refreshProvider } = useUsageData(range)
   const limits = useLimitsData()
@@ -87,6 +94,34 @@ function App() {
       }
     }).catch(() => undefined)
     return () => { active = false }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    void window.usageApi.getWhatsNew().then((status) => {
+      if (active && status.shouldShow) setAutoReleaseNotes(true)
+    }).catch(() => undefined)
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => {
+    const update = () => setWindowVisible(document.visibilityState !== 'hidden')
+    document.addEventListener('visibilitychange', update)
+    return () => document.removeEventListener('visibilitychange', update)
+  }, [])
+
+  useEffect(() => {
+    if (!autoReleaseNotes || autoReleaseShown.current || modal !== null || !windowVisible) return
+    const note = latestReleaseNote(APP_VERSION)
+    if (!note) return
+    autoReleaseShown.current = true
+    setModal({ kind: 'whatsNew', note })
+  }, [autoReleaseNotes, modal, windowVisible])
+
+  const closeReleaseNotes = useCallback(() => {
+    setAutoReleaseNotes(false)
+    setModal(null)
+    void window.usageApi.markWhatsNewSeen().catch(() => undefined)
   }, [])
 
   const selectRange = useCallback((next: UsageRange) => {
@@ -177,6 +212,7 @@ function App() {
       )}
       {modal?.kind === 'accounts' && <AccountsDialog updates={updates} onChanged={refresh}
         onClose={() => { updates.dismissFeedback(); setModal(null) }} />}
+      {modal?.kind === 'whatsNew' && <ReleaseNotesDialog note={modal.note} onClose={closeReleaseNotes} />}
     </div>
   )
 }

@@ -569,6 +569,39 @@ button:disabled { cursor: default; }
 .price-peak-tip-prices { color: #c4c4ca; font-variant-numeric: tabular-nums; }
 .price-peak-tip-off { color: var(--color-subtle); }
 
+.release-notes-body { padding-top: 4px; }
+.release-notes-markdown {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--color-ink);
+  font-size: 14px;
+  line-height: 1.65;
+}
+.release-notes-markdown h3 {
+  margin-top: 6px;
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+.release-notes-markdown h3:first-child { margin-top: 0; }
+.release-notes-markdown ul {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-inline-start: 1.15em;
+}
+.release-notes-markdown li { padding-inline-start: 2px; }
+.release-notes-markdown li::marker { color: var(--color-subtle); }
+.release-notes-markdown p { color: var(--color-subtle); }
+.release-notes-markdown code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--color-canvas);
+  font-size: .92em;
+  font-variant-numeric: tabular-nums;
+}
 
 .accounts-body { display: grid; gap: 12px; }
 .accounts-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }

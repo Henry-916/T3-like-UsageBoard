@@ -5,7 +5,7 @@ import { pricingSettingsSchema, providerSchema, uiPreferencesSchema, usageSummar
 import type { PricePreset, UsageProviderKind, UsageSummary, UsageSummaryInput } from '../shared/types'
 import { accountChangesSchema, addManualAccountSchema, startAccountLoginSchema } from '../shared/limitsTypes'
 import type { AccountsReport } from '../shared/limitsTypes'
-import { readConfig, updateConfig } from './configStore'
+import { markWhatsNewSeen, readConfig, readWhatsNewStatus, updateConfig } from './configStore'
 import type { createAccountService } from './accounts/service'
 import type { createLimitsService } from './limits/service'
 import type { createAccountLoginManager } from './accounts/loginManager'
@@ -175,5 +175,13 @@ export function registerIpc(
     if (!parsed.success) throw new Error('Invalid UI preferences')
     await updateConfig(userData, config => ({ ...config, preferences: { ...config.preferences, ...parsed.data } }))
     tray.send(usageChannels.preferencesUpdated, uiPreferencesSchema.parse((await readConfig(userData)).preferences))
+  })
+  ipcMain.handle(usageChannels.whatsNew, event => {
+    ownWindow(event)
+    return readWhatsNewStatus(userData)
+  })
+  ipcMain.handle(usageChannels.markWhatsNewSeen, event => {
+    ownWindow(event)
+    return markWhatsNewSeen(userData)
   })
 }
