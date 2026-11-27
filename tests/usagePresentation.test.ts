@@ -22,6 +22,7 @@ describe('usage overview presentation', () => {
       readAt: '', timeZone: 'UTC', sinceDay: '2026-11-24', untilDay: '2026-11-24', scanDurationMs: 0,
       pricing: { status: 'fresh', source: 'test', fetchedAt: null, knownModels: 0 },
       buckets: [bucket(), bucket({ provider: 'opencode' }), bucket({ provider: 'claude' })],
+      modelPrices: {},
       sources: [
         { provider: 'codex', status: 'ok', distinctSessions: 4, scannedFiles: 0, skippedFiles: 0 },
         { provider: 'opencode', status: 'partial', distinctSessions: 2, scannedFiles: 0, skippedFiles: 0 },

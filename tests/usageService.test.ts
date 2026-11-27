@@ -25,7 +25,7 @@ test('scans a shared root once, caches unchanged files, and retains auto-pruned 
     await writeConfig(userData, config)
     let clock = Date.parse('2026-11-24T00:00:00Z')
     const service = createUsageService({
-      home, env: {}, userData, now: () => clock, fallbackRates: resolve('resources/fallback-rates.json')
+      home, env: {}, userData, now: () => clock, bundledSnapshot: resolve('resources/models-dev-snapshot.json')
     })
     const query = { sinceDay: '2026-11-01', untilDay: '2026-11-24', timeZone: 'UTC' }
     const first = await service.getSummary(query)
@@ -62,7 +62,7 @@ test.skipIf(!process.env.USAGE_SMOKE_SUMMARY)('exports real local usage into an 
   const since = new Date(now.getTime() - 90 * 86_400_000)
   const isoDay = (date: Date) => date.toISOString().slice(0, 10)
   try {
-    const summary = await createUsageService({ userData, fallbackRates: resolve('resources/fallback-rates.json') })
+    const summary = await createUsageService({ userData, bundledSnapshot: resolve('resources/models-dev-snapshot.json') })
       .getSummary({ timeZone: 'UTC', sinceDay: isoDay(since), untilDay: isoDay(now) })
     await writeFile(output, JSON.stringify(summary, null, 2))
     expect(summary.buckets.length).toBeGreaterThan(0)
@@ -91,7 +91,7 @@ test('reprices qualified OpenCode history from edited config without rescanning 
       }))
     }
     const service = createUsageService({
-      home, env: { OPENCODE_DATA_DIR: openCode }, userData, fallbackRates: resolve('resources/fallback-rates.json')
+      home, env: { OPENCODE_DATA_DIR: openCode }, userData, bundledSnapshot: resolve('resources/models-dev-snapshot.json')
     })
     const query = { sinceDay: day, untilDay: day, timeZone: 'UTC' }
     const first = await service.getSummary(query)
@@ -113,6 +113,69 @@ test('reprices qualified OpenCode history from edited config without rescanning 
     expect(priced.buckets[0].costUsd).toBeCloseTo(0.0002, 12)
     await writeRates(20)
     expect((await service.getSummary(query)).buckets[0].costUsd).toBeCloseTo(0.002, 12)
+  } finally {
+    fetchMock.mockRestore()
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test('keeps a provider fast refresh independent from a concurrent full refresh', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'usage-concurrent-refresh-'))
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'))
+  try {
+    const userData = join(home, 'app')
+    const claudeHome = join(home, '.claude')
+    const projects = join(claudeHome, 'projects')
+    const codexHome = join(home, '.codex')
+    const sessions = join(codexHome, 'sessions')
+    await mkdir(projects, { recursive: true })
+    await mkdir(sessions, { recursive: true })
+    const claudePath = join(projects, 'session.jsonl')
+    const codexPath = join(sessions, 'rollout-fixture.jsonl')
+    const claudeLine = (id: string, minute: number) => JSON.stringify({
+      type: 'assistant', timestamp: `2026-11-22T11:0${minute}:00Z`, requestId: id,
+      sessionId: 'claude-session',
+      message: { id, model: 'claude-sonnet-4-6', usage: { input_tokens: 100, output_tokens: 10 } }
+    })
+    const codexJson = (minute: number, input: number) => [
+      { timestamp: '2026-11-22T10:00:00Z', type: 'session_meta', payload: { id: 'codex-session' } },
+      { timestamp: '2026-11-22T10:00:00Z', type: 'turn_context', payload: { model: 'gpt-5' } },
+      {
+        timestamp: `2026-11-22T12:0${minute}:00Z`, type: 'event_msg',
+        payload: { type: 'token_count', info: { last_token_usage: { input_tokens: input, output_tokens: 5 } } }
+      }
+    ].map((row) => JSON.stringify(row)).join('\n') + '\n'
+    await writeFile(claudePath, `${claudeLine('req-1', 1)}\n`)
+    await writeFile(codexPath, codexJson(1, 50))
+    const config = await readConfig(userData)
+    config.accounts = [
+      { id: 'claude', provider: 'claude', displayName: 'Claude', dataDir: claudeHome },
+      { id: 'codex', provider: 'codex', displayName: 'Codex', dataDir: codexHome },
+    ]
+    await writeConfig(userData, config)
+    const service = createUsageService({
+      home, env: {}, userData, now: () => Date.parse('2026-11-24T00:00:00Z'),
+      bundledSnapshot: resolve('resources/models-dev-snapshot.json')
+    })
+    const query = { sinceDay: '2026-11-01', untilDay: '2026-11-24', timeZone: 'UTC' }
+    const first = await service.getSummary(query)
+    expect(first.buckets.find(bucket => bucket.provider === 'claude')?.records).toBe(1)
+    expect(first.buckets.find(bucket => bucket.provider === 'codex')?.records).toBe(1)
+
+    await writeFile(claudePath, `${claudeLine('req-1', 1)}\n${claudeLine('req-2', 2)}\n`)
+    await writeFile(codexPath, codexJson(1, 50) + codexJson(2, 70).split('\n')[2] + '\n')
+
+    // Stage 1 and the background full scan overlap deliberately.
+    const [fast, full] = await Promise.all([
+      service.getSummary(query, true, 'claude'),
+      service.getSummary(query, true),
+    ])
+    expect(fast.buckets.find(bucket => bucket.provider === 'claude')?.records).toBe(2)
+    expect(full.buckets.find(bucket => bucket.provider === 'claude')?.records).toBe(2)
+    expect(full.buckets.find(bucket => bucket.provider === 'codex')?.records).toBe(2)
+    const settled = await service.getSummary(query)
+    expect(settled.buckets.find(bucket => bucket.provider === 'claude')?.records).toBe(2)
+    expect(settled.buckets.find(bucket => bucket.provider === 'codex')?.records).toBe(2)
   } finally {
     fetchMock.mockRestore()
     await rm(home, { recursive: true, force: true })
@@ -144,7 +207,7 @@ test('scans a directly selected Antigravity conversations directory and keeps an
     const config = await readConfig(userData)
     config.accounts = [{ id: 'direct', provider: 'antigravity', displayName: 'Direct', dataDir: conversations }]
     await writeConfig(userData, config)
-    const options = { userData, fallbackRates: resolve('resources/fallback-rates.json'), home,
+    const options = { userData, bundledSnapshot: resolve('resources/models-dev-snapshot.json'), home,
       env: { ANTIGRAVITY_DATA_DIR: join(home, 'missing'), OPENCODE_DATA_DIR: openCode } }
     const query = { sinceDay: day, untilDay: day, timeZone: 'UTC' }
     const first = await createUsageService(options).getSummary(query)
@@ -188,7 +251,7 @@ test('scans disabled native Antigravity history but skips disabled manual direct
     }
     const config = await readConfig(userData)
     config.accounts = [{ id: 'manual', provider: 'antigravity', displayName: 'Manual', dataDir: manual }]
-    const options = { home, env: {}, userData, fallbackRates: resolve('resources/fallback-rates.json') }
+    const options = { home, env: {}, userData, bundledSnapshot: resolve('resources/models-dev-snapshot.json') }
     const discovered = await discoverAccounts(config, options)
     const nativeAccount = discovered.find(account => account.provider === 'antigravity' && account.origin === 'native')!
     config.accountPreferences = { [nativeAccount.id]: { enabled: false }, manual: { enabled: false } }

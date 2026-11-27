@@ -369,7 +369,7 @@ button:disabled { cursor: default; }
 .price-table-toolbar { display: flex; justify-content: space-between; gap: 8px; align-items: center; color: var(--color-subtle); font-size: 12px; }
 .price-table-wrap { overflow-x: auto; overscroll-behavior: contain; border: 1px solid var(--color-divider); border-radius: 8px; }
 .price-table { width: 100%; min-width: 640px; table-layout: fixed; text-align: start; font-size: 13px; }
-.price-table :is(th, td) { text-align: start; padding: 7px; }
+.price-table :is(th, td) { text-align: start; padding: 7px; vertical-align: middle; }
 .price-table th { color: var(--color-subtle); font-size: 12px; font-weight: 500; }
 .price-table tr:not(:last-child), .price-table thead tr { border-bottom: 1px solid var(--color-divider); }
 .price-model-col { width: 35%; }
@@ -435,7 +435,9 @@ button:disabled { cursor: default; }
 .preset-option-main { display: grid; min-width: 0; gap: 1px; }
 .preset-option-main strong { font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .preset-option-main span { font-size: 11px; color: var(--color-subtle); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.preset-option-rates { flex: none; font-size: 11px; color: #c4c4ca; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.preset-option-rates { display: inline-flex; align-items: center; gap: 5px; flex: none; font-size: 11px; color: #c4c4ca; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.preset-peak-mark { display: inline-flex; align-items: center; color: var(--color-subtle); }
+.preset-picker-option:is(:hover, [data-active="true"]) .preset-peak-mark { color: var(--color-ink); }
 .preset-picker-tip {
   position: fixed;
   z-index: 20;
@@ -453,6 +455,7 @@ button:disabled { cursor: default; }
   white-space: normal;
   pointer-events: none;
 }
+.preset-picker-tip[data-kind="peak"] { white-space: pre-line; }
 .price-field {
   width: 100%;
   height: 30px;
@@ -478,6 +481,56 @@ button:disabled { cursor: default; }
 }
 .preset-picker-clear:hover { color: var(--color-ink); background: rgb(255 255 255 / 0.08); }
 .price-placeholder { min-height: 110px; display: flex; gap: 10px; align-items: center; justify-content: center; color: var(--color-subtle); font-size: 13px; }
+
+.price-model-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.price-model-name { flex: 1 1 auto; min-width: 0; }
+.price-model-input { flex: 1 1 auto; min-width: 0; }
+.price-peak-pill {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 3px;
+  height: 21px;
+  padding: 0 7px;
+  border: 1px solid #ffffff29;
+  border-radius: 999px;
+  background: var(--control);
+  color: var(--color-ink);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.price-peak-pill:hover:not(:disabled) { background: var(--control-active); border-color: #ffffff45; }
+.price-peak-pill[aria-checked="true"] {
+  border-color: #ffffff52;
+  background: #2b2b30;
+  color: var(--color-ink);
+}
+.price-peak-pill[aria-checked="false"] { color: var(--color-subtle); opacity: .62; }
+.price-peak-pill:disabled { opacity: .45; }
+.price-peak-tip {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: max-content;
+  max-width: min(24rem, calc(100vw - 16px));
+  padding: 6px 9px;
+  border: 1px solid #272727;
+  border-radius: 6px;
+  background: #0f0f0f;
+  color: #d7d7db;
+  box-shadow: 0 8px 20px rgb(0 0 0 / 0.78);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: normal;
+  pointer-events: none;
+}
+.price-peak-tip-entry { display: flex; flex-direction: column; gap: 1px; }
+.price-peak-tip-schedule { color: #ececf0; }
+.price-peak-tip-prices { color: #c4c4ca; font-variant-numeric: tabular-nums; }
+.price-peak-tip-off { color: var(--color-subtle); }
 
 .accounts-body { display: grid; gap: 12px; }
 .accounts-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }

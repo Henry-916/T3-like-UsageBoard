@@ -1,29 +1,30 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describePeakSchedules, timeScheduleMultipliers } from "../src/shared/pricingMultipliers";
+import { resetModelsDevState, waitForModelsDevRefresh } from "../src/main/usage/modelsDev";
 import { loadPricePresets } from "../src/main/usage/pricePresets";
 
 let home: string;
 let userData: string;
-let fallbackRates: string;
+const bundledSnapshot = () => `${userData}/missing-snapshot.json`;
+
+async function loadPresets() {
+  await loadPricePresets({ userData, bundledSnapshot: bundledSnapshot() });
+  await waitForModelsDevRefresh(userData);
+  return loadPricePresets({ userData, bundledSnapshot: bundledSnapshot() });
+}
 
 beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), "usageboard-presets-"));
   userData = join(home, "userData");
-  fallbackRates = join(home, "fallback-rates.json");
   await mkdir(userData, { recursive: true });
-  await writeFile(fallbackRates, JSON.stringify({
-    source: "test",
-    fetchedAt: new Date().toISOString(),
-    rates: {
-      "openai/gpt-5": { input_cost_per_token: 1.25e-6, output_cost_per_token: 10e-6 },
-      "deepseek/deepseek-chat": { input_cost_per_token: 0.28e-6, output_cost_per_token: 0.42e-6 },
-    },
-  }));
 });
 
 afterEach(async () => {
+  await waitForModelsDevRefresh(userData).catch(() => undefined);
+  resetModelsDevState();
   await rm(home, { recursive: true, force: true });
 });
 
@@ -51,7 +52,34 @@ async function plantLocalCatalogs() {
 }
 
 describe("loadPricePresets", () => {
-  it("loads only from models.dev/api.json, ignores local catalogs and LiteLLM fallback, and uses provider/model as label", async () => {
+  it("builds presets and peak rules from the bundled snapshot", async () => {
+    const raw = JSON.parse(await readFile(resolve("resources/models-dev-snapshot.json"), "utf8"));
+    await put(join(userData, "models-dev-cache.json"), JSON.stringify({
+      ...raw, fetchedAt: new Date().toISOString(),
+    }));
+    const presets = await loadPricePresets({ userData, bundledSnapshot: bundledSnapshot() });
+    expect(presets.length).toBeGreaterThan(100);
+    const flash = presets.find(({ modelId }) => modelId === "deepseek/deepseek-v4.1-flash-1017");
+    expect(flash).toMatchObject({
+      providerLabel: "DeepSeek",
+      inputCostPerMillionTokens: 0.15,
+      outputCostPerMillionTokens: 0.6,
+    });
+    expect(flash?.multipliers?.length).toBeGreaterThan(0);
+    expect(presets.some(({ modelId }) => modelId.includes("openai/"))).toBe(true);
+    // Every exposed peak rule must resolve to a local clock schedule; service-tier
+    // and date-only multipliers stay out of the preset picker entirely.
+    for (const preset of presets) {
+      if (!preset.multipliers) continue
+      expect(timeScheduleMultipliers(preset.multipliers)).toHaveLength(preset.multipliers.length)
+      expect(describePeakSchedules(preset.multipliers, "Asia/Shanghai").length).toBeGreaterThan(0)
+    }
+    const gpt = presets.find(({ modelId }) => modelId === "openai/gpt-6.2-sol")
+    expect(gpt).toBeDefined()
+    expect(gpt?.multipliers).toBeUndefined()
+  });
+
+  it("loads only from models.dev, ignores local catalogs, and uses provider/model as label", async () => {
     await plantLocalCatalogs();
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(modelsDevResponse({
       deepseek: {
@@ -75,13 +103,13 @@ describe("loadPricePresets", () => {
     }));
 
     try {
-      const presets = await loadPricePresets({ userData });
-      expect(fetchMock).toHaveBeenCalledWith("https://models.dev/api.json", expect.any(Object));
+      const presets = await loadPresets();
+      expect(fetchMock).toHaveBeenCalledWith("https://models.dev/experimental/v2.0/api.json?type=all", expect.any(Object));
       expect(presets.map(({ modelId }) => modelId)).toEqual([
         "openai/gpt-5", "deepseek/deepseek-v4.1-flash-1017",
       ]);
       expect(presets.every(({ source }) => source === "models.dev")).toBe(true);
-      // Local OpenCode files and the LiteLLM fixture are never consulted.
+      // Local OpenCode catalog files are never consulted.
       expect(presets.some(({ modelId }) => modelId.includes("local-only"))).toBe(false);
       expect(presets.some(({ modelId }) => modelId.includes("deepseek-chat"))).toBe(false);
 
@@ -98,23 +126,104 @@ describe("loadPricePresets", () => {
         inputCostPerMillionTokens: 0.28,
         outputCostPerMillionTokens: 0.42,
       });
-      expect(flash).not.toHaveProperty("cacheReadCostPerMillionTokens");
-      expect(flash).not.toHaveProperty("cacheWriteCostPerMillionTokens");
+      expect(flash.cacheReadCostPerMillionTokens).toBe(0.28);
+      expect(flash.cacheWriteCostPerMillionTokens).toBe(0.28);
 
       const gpt = presets.find(({ modelId }) => modelId === "openai/gpt-5")!;
       expect(gpt).toMatchObject({
         label: "openai/gpt-5",
         cacheReadCostPerMillionTokens: 0.125,
+        cacheWriteCostPerMillionTokens: 1.25,
       });
-      expect(gpt).not.toHaveProperty("cacheWriteCostPerMillionTokens");
 
-      // The cache stores only the projected canonical ID, release metadata and cost.
+      // The cache stores only the projected canonical ID, release metadata and rates.
       const cacheFile = await readFile(join(userData, "models-dev-cache.json"), "utf8");
       const cache = JSON.parse(cacheFile);
-      expect(cache.version).toBe(4);
+      expect(cache.version).toBe(6);
       expect(cache.adoption["deepseek/deepseek-v4.1-flash-1017"]).toBe(1);
       expect(cacheFile).not.toMatch(/Daybreak Red|SHOULD-NOT-BE-DECODED|SECRET-KEY|example\.invalid/);
-      expect(cacheFile).toContain('"canonical_model_id":" DeepSeek/DeepSeek-V4.1-Flash-1017 "');
+      expect(cache.catalog.deepseek.models["deepseek-flash"].c).toBe("deepseek/deepseek-v4.1-flash-1017");;
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("reads the v2 catalog cost.text, canonical_id and peak multipliers", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(modelsDevResponse({
+      deepseek: {
+        models: {
+          "deepseek-v4-flash": {
+            canonical_id: "deepseek/deepseek-v4-flash",
+            release_date: "2026-10-17",
+            modalities: { output: ["text"] },
+            cost: {
+              text: {
+                input: { price: 0.28, cache: { read: 0.028, write: { "5m": 0.28 } } },
+                output: { price: 0.42 },
+              },
+              multipliers: [{
+                when: {
+                  utc_days: { in: ["mon", "tue", "wed", "thu", "fri"] },
+                  any: [
+                    { all: [{ utc_hours: { gte: "01:00" } }, { utc_hours: { lt: "04:00" } }] },
+                    { all: [{ utc_hours: { gte: "06:00" } }, { utc_hours: { lt: "10:00" } }] },
+                  ],
+                },
+                factor: 2,
+              }],
+            },
+          },
+        },
+      },
+    }));
+    try {
+      const presets = await loadPresets();
+      expect(presets).toHaveLength(1);
+      expect(presets[0]).toMatchObject({
+        modelId: "deepseek/deepseek-v4-flash",
+        canonicalId: "deepseek/deepseek-v4-flash",
+        inputCostPerMillionTokens: 0.28,
+        outputCostPerMillionTokens: 0.42,
+        cacheReadCostPerMillionTokens: 0.028,
+        cacheWriteCostPerMillionTokens: 0.28,
+      });
+      expect(presets[0]?.multipliers).toHaveLength(1);
+      expect(presets[0]?.multipliers?.[0]?.factor).toBe(2);
+      const cache = JSON.parse(await readFile(join(userData, "models-dev-cache.json"), "utf8"));
+      expect(cache.version).toBe(6);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("only exposes time-of-day peak schedules on presets", async () => {
+    const time = { when: { utc_hours: { gte: "14:00" } }, factor: 2 };
+    const tier = { when: { service_tier: { equals: "priority" } }, factor: 3 };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(modelsDevResponse({
+      deepseek: {
+        models: {
+          "deepseek-service": {
+            canonical_id: "deepseek/deepseek-service",
+            cost: {
+              text: { input: { price: 1 }, output: { price: 2 } },
+              multipliers: [tier],
+            },
+          },
+          "deepseek-peak": {
+            canonical_id: "deepseek/deepseek-peak",
+            cost: {
+              text: { input: { price: 1 }, output: { price: 2 } },
+              multipliers: [tier, time],
+            },
+          },
+        },
+      },
+    }));
+    try {
+      const presets = await loadPresets();
+      const byId = new Map(presets.map((preset) => [preset.modelId, preset]));
+      expect(byId.get("deepseek/deepseek-service")).not.toHaveProperty("multipliers");
+      expect(byId.get("deepseek/deepseek-peak")?.multipliers).toEqual([time]);
     } finally {
       fetchMock.mockRestore();
     }
@@ -124,15 +233,15 @@ describe("loadPricePresets", () => {
     await plantLocalCatalogs();
     const offline = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("offline"));
     try {
-      const presets = await loadPricePresets({ userData });
-      expect(offline).toHaveBeenCalledWith("https://models.dev/api.json", expect.anything());
+      const presets = await loadPresets();
+      expect(offline).toHaveBeenCalledWith("https://models.dev/experimental/v2.0/api.json?type=all", expect.anything());
       expect(presets).toEqual([]);
     } finally {
       offline.mockRestore();
     }
   });
 
-  it("ignores legacy caches without version 4", async () => {
+  it("ignores legacy caches without version 5", async () => {
     await put(join(userData, "models-dev-cache.json"), JSON.stringify({
       version: 3,
       fetchedAt: new Date().toISOString(),
@@ -140,16 +249,16 @@ describe("loadPricePresets", () => {
     }));
     const offline = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("offline"));
     try {
-      expect(await loadPricePresets({ userData })).toEqual([]);
+      expect(await loadPresets()).toEqual([]);
     } finally {
       offline.mockRestore();
     }
   });
 
-  it("reuses a fresh 24h cache and falls back to an expired version 4 cache offline", async () => {
+  it("reuses a fresh 24h cache and falls back to an expired version 5 cache offline", async () => {
     let online = true;
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      if (String(input) === "https://models.dev/api.json" && online) {
+      if (String(input) === "https://models.dev/experimental/v2.0/api.json?type=all" && online) {
         return modelsDevResponse({
           anthropic: {
             models: {
@@ -166,22 +275,23 @@ describe("loadPricePresets", () => {
     });
 
     try {
-      const first = await loadPricePresets({ userData });
+      const first = await loadPresets();
       expect(first.map(({ modelId }) => modelId)).toEqual(["anthropic/claude-sonnet-4-6"]);
 
       fetchMock.mockClear();
-      const second = await loadPricePresets({ userData });
-      expect(fetchMock).not.toHaveBeenCalledWith("https://models.dev/api.json", expect.anything());
+      const second = await loadPresets();
+      expect(fetchMock).not.toHaveBeenCalledWith("https://models.dev/experimental/v2.0/api.json?type=all", expect.anything());
       expect(second).toEqual(first);
 
       const cacheFile = await readFile(join(userData, "models-dev-cache.json"), "utf8");
       online = false;
+      resetModelsDevState();
       await put(join(userData, "models-dev-cache.json"), JSON.stringify({
         ...JSON.parse(cacheFile), fetchedAt: new Date(Date.now() - 25 * 3600_000).toISOString(),
       }));
       fetchMock.mockClear();
-      const stale = await loadPricePresets({ userData });
-      expect(fetchMock).toHaveBeenCalledWith("https://models.dev/api.json", expect.anything());
+      const stale = await loadPresets();
+      expect(fetchMock).toHaveBeenCalledWith("https://models.dev/experimental/v2.0/api.json?type=all", expect.anything());
       expect(stale).toEqual(first);
     } finally {
       fetchMock.mockRestore();
@@ -240,7 +350,7 @@ it("collects Tier A + Tier B channels, collapses regional copies, keeps price va
     }));
 
     try {
-      const presets = await loadPricePresets({ userData });
+      const presets = await loadPresets();
       const ids = presets.map(({ modelId }) => modelId);
       expect(ids).toEqual(expect.arrayContaining([
         "moonshotai/kimi-k3",
@@ -346,7 +456,7 @@ it("collects Tier A + Tier B channels, collapses regional copies, keeps price va
     }));
 
     try {
-      const presets = await loadPricePresets({ userData });
+      const presets = await loadPresets();
       const ids = presets.map(({ modelId }) => modelId);
       // Five providers carry the model, so it outranks the single-provider 2026 release.
       expect(ids[0]).toBe("deepseek/deepseek-hot");
@@ -369,7 +479,7 @@ it("collects Tier A + Tier B channels, collapses regional copies, keeps price va
       expect(ids).not.toContain("openai/text-embedding-3");
 
       const cache = JSON.parse(await readFile(join(userData, "models-dev-cache.json"), "utf8"));
-      expect(cache.version).toBe(4);
+      expect(cache.version).toBe(6);
       expect(cache.adoption["deepseek/deepseek-hot"]).toBe(5);
     } finally {
       fetchMock.mockRestore();
@@ -401,7 +511,7 @@ it("collects Tier A + Tier B channels, collapses regional copies, keeps price va
     }));
 
     try {
-      const presets = await loadPricePresets({ userData });
+      const presets = await loadPresets();
       const byId = new Map(presets.map((preset) => [preset.modelId, preset]));
       const ids = presets.map(({ modelId }) => modelId);
 

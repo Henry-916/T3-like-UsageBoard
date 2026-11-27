@@ -1,13 +1,12 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import type {
-  PriceOverrides, UsageCategoryCost, UsageCostSource, UsagePricing, UsageRecord,
+  PriceOverrides, RateCondition, RateMultiplier, UsageCategoryCost, UsageCostSource, UsageModelPrice, UsagePricing, UsageRecord,
 } from "../../shared/types";
+import { multiplierFactor, scaleTokenRates } from "../../shared/pricingMultipliers";
+import { buildRateTable, loadModelsDevSnapshot } from "./modelsDev";
+import type { ModelRate, TokenRates } from "./rateModel";
 
-type TokenRates = UsageCategoryCost & { cacheWrite1h: number };
-type SpeedRates = { standard: TokenRates; fast: TokenRates | null; ultrafast: TokenRates | null };
-type ModelRate = SpeedRates & { tiers: readonly { threshold: number; rates: SpeedRates }[] };
+export { buildRateTable };
+export type { ModelRate, TokenRates } from "./rateModel";
 export type RateTable = ReadonlyMap<string, ModelRate>;
 
 export interface PricingResult {
@@ -15,122 +14,9 @@ export interface PricingResult {
   readonly status: UsagePricing;
 }
 
-const URL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
-const TTL_MS = 24 * 60 * 60 * 1000;
-const TIMEOUT_MS = 8000;
 const keyFor = (name: string): string => name.trim().toLowerCase();
-const isObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 const amount = (value: unknown): number | null =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
-
-function readRates(
-  entry: Record<string, unknown>,
-  suffix: string,
-  base?: TokenRates,
-  outputFallback?: number,
-): TokenRates | null {
-  const input = amount(entry[`input_cost_per_token${suffix}`]);
-  const output = amount(entry[`output_cost_per_token${suffix}`]) ?? outputFallback;
-  if (input === null || output === undefined) return null;
-  const cache = (key: string, field: keyof TokenRates, fallback = input) =>
-    amount(entry[key + suffix]) ??
-    (base && base.input > 0 ? (base[field] / base.input) * input : fallback);
-  const cacheWrite = cache("cache_creation_input_token_cost", "cacheWrite");
-  return {
-    input, output, cacheWrite,
-    cacheRead: cache("cache_read_input_token_cost", "cacheRead"),
-    cacheWrite1h: cache("cache_creation_input_token_cost_above_1hr", "cacheWrite1h", cacheWrite),
-  };
-}
-
-function speedRates(entry: Record<string, unknown>, standard: TokenRates, suffix = ""): SpeedRates {
-  const specific = entry.provider_specific_entry;
-  const multiple = isObject(specific) ? amount(specific.fast) : null;
-  const fast = multiple !== null && multiple > 0
-    ? {
-        input: standard.input * multiple,
-        output: standard.output * multiple,
-        cacheRead: standard.cacheRead * multiple,
-        cacheWrite: standard.cacheWrite * multiple,
-        cacheWrite1h: standard.cacheWrite1h * multiple,
-      }
-    : readRates(entry, `${suffix}_priority`, standard);
-  return { standard, fast, ultrafast: readRates(entry, `${suffix}_ultrafast`, standard) };
-}
-
-const firstParty = new Set(["anthropic", "deepseek", "gemini", "meta", "mistral", "openai", "xai"]);
-const inferredBareKeys = new WeakMap<RateTable, ReadonlySet<string>>();
-
-function mergeSpeeds(a: SpeedRates, b: SpeedRates): SpeedRates | null {
-  const same = (x: TokenRates, y: TokenRates) =>
-    x.input === y.input && x.output === y.output && x.cacheRead === y.cacheRead &&
-    x.cacheWrite === y.cacheWrite && x.cacheWrite1h === y.cacheWrite1h;
-  if (!same(a.standard, b.standard) ||
-    (a.fast && b.fast && !same(a.fast, b.fast)) ||
-    (a.ultrafast && b.ultrafast && !same(a.ultrafast, b.ultrafast))) return null;
-  return { standard: a.standard, fast: a.fast ?? b.fast, ultrafast: a.ultrafast ?? b.ultrafast };
-}
-
-function mergeRates(a: ModelRate, b: ModelRate): ModelRate | null {
-  const base = mergeSpeeds(a, b);
-  if (!base) return null;
-  if (!a.tiers.length || !b.tiers.length) return { ...base, tiers: a.tiers.length ? a.tiers : b.tiers };
-  if (a.tiers.length !== b.tiers.length) return null;
-  const tiers = [];
-  for (const [i, tier] of a.tiers.entries()) {
-    const other = b.tiers[i];
-    const rates = mergeSpeeds(tier.rates, other.rates);
-    if (tier.threshold !== other.threshold || !rates) return null;
-    tiers.push({ threshold: tier.threshold, rates });
-  }
-  return { ...base, tiers };
-}
-
-export function parseRateTable(document: unknown): RateTable {
-  const table = new Map<string, ModelRate>();
-  if (!isObject(document)) return table;
-  for (const [name, entry] of Object.entries(document)) {
-    if (!isObject(entry) || name === "sample_spec") continue;
-    const key = keyFor(name);
-    const standard = readRates(entry, "");
-    if (!key || !standard) continue;
-    const thresholds = new Set<string>();
-    for (const field of Object.keys(entry)) {
-      const match = /^input_cost_per_token_above_(\d{1,7})k_tokens(?:_priority|_ultrafast)?$/.exec(field);
-      if (match) thresholds.add(match[1]);
-    }
-    const tiers = [...thresholds].map((threshold) => {
-      const suffix = `_above_${threshold}k_tokens`;
-      const base = readRates(entry, suffix, standard, standard.output) ?? standard;
-      return { threshold: Number(threshold) * 1000, rates: speedRates(entry, base, suffix) };
-    }).sort((a, b) => b.threshold - a.threshold);
-    table.set(key, { ...speedRates(entry, standard), tiers });
-  }
-
-  // Bare aliases prefer first-party pricing. Conflicting peers stay unlisted.
-  const candidates = new Map<string, { rate: ModelRate | null; preferred: boolean }>();
-  for (const [key, rate] of table) {
-    const slash = key.indexOf("/");
-    const alias = slash < 0 ? key.replace(/^anthropic\./, "") : key.slice(key.lastIndexOf("/") + 1);
-    if (!alias || alias === key || table.has(alias)) continue;
-    const preferred = slash >= 0 && firstParty.has(key.slice(0, slash));
-    const held = candidates.get(alias);
-    if (!held || (preferred && !held.preferred)) candidates.set(alias, { rate, preferred });
-    else if (held.rate && preferred === held.preferred) {
-      candidates.set(alias, { rate: mergeRates(held.rate, rate), preferred });
-    }
-  }
-  const inferred = new Set<string>();
-  for (const [alias, { rate }] of candidates) {
-    if (rate) {
-      table.set(alias, rate);
-      inferred.add(alias);
-    }
-  }
-  inferredBareKeys.set(table, inferred);
-  return table;
-}
 
 export function createOverrideRateTable(overrides: PriceOverrides): RateTable {
   const table = new Map<string, ModelRate>();
@@ -142,7 +28,9 @@ export function createOverrideRateTable(overrides: PriceOverrides): RateTable {
         input, output: price.outputCostPerMillionTokens / 1e6, cacheWrite, cacheWrite1h: cacheWrite,
         cacheRead: (price.cacheReadCostPerMillionTokens ?? price.inputCostPerMillionTokens) / 1e6,
       },
-      fast: null, ultrafast: null, tiers: [],
+      tiers: [],
+      // A switched-off peak schedule stays stored but never bills or displays.
+      multipliers: price.multipliersEnabled === false ? [] : price.multipliers ?? [],
     });
   }
   return table;
@@ -154,53 +42,134 @@ export function lookupRate(table: RateTable, model: string): ModelRate | undefin
   return unpriceable.has(key.slice(key.lastIndexOf("/") + 1)) ? undefined : table.get(key);
 }
 
-// An empty prefix permits an explicit bare LiteLLM entry for these gateways only.
-const gatewayPrefixes = new Map<string, readonly string[]>([
-  ["opencode-go", ["opencode_go/"]], ["opencode", ["opencode/"]],
-  ["google", ["gemini/"]], ["google-vertex", ["vertex_ai/"]],
-  ...["alibaba-cn", "alibaba", "dashscope"].map(provider =>
-    [provider, ["dashscope/", "qwen_ai_platform/", "qwencloud/"]] as const),
-  ["openai", ["openai/", ""]],
-  ["anthropic", ["anthropic/", "anthropic.", ""]], ["claude-code", ["anthropic/", "anthropic.", ""]],
-  ["deepseek", ["deepseek/", ""]], ["xai", ["xai/", ""]], ["mistral", ["mistral/", ""]],
-  ["azure", ["azure/", "azure_ai/"]],
-  ["amazon-bedrock", ["bedrock/", "bedrock_mantle/"]], ["bedrock", ["bedrock/", "bedrock_mantle/"]],
-  ["openrouter", ["openrouter/"]], ["github-copilot", ["github_copilot/"]],
-  ["groq", ["groq/"]], ["perplexity", ["perplexity/"]], ["deepinfra", ["deepinfra/"]],
-  ["togetherai", ["together_ai/"]], ["fireworks-ai", ["fireworks_ai/"]],
-  ["nebius", ["nebius/"]], ["novita", ["novita/"]], ["baseten", ["baseten/"]],
+// Client-side synonyms only; never strip an unknown or private relay prefix.
+const channelAliases = new Map<string, readonly string[]>([
+  ["openai-codex", ["openai"]],
+  ["openai-chatgpt", ["openai"]],
+  ["claude-code", ["anthropic"]],
+  ["dashscope", ["alibaba-cn", "alibaba"]],
+  ["bedrock", ["amazon-bedrock"]],
 ]);
 
+// Snapshot-date suffixes such as -20251101 or -2026-10-01 fall back to the base model.
+const SNAPSHOT_SUFFIX = /-(?:\d{4}-\d{2}-\d{2}|\d{8})$/;
+
+function withoutSnapshotDate(model: string): string {
+  return model.replace(SNAPSHOT_SUFFIX, "");
+}
+
 function lookupQualifiedRate(table: RateTable, model: string, slash: number): ModelRate | undefined {
+  const provider = model.slice(0, slash);
   const rest = model.slice(slash + 1);
-  // Check the model itself too, before adding a dotted prefix such as anthropic.
   if (!rest || unpriceable.has(rest.split("[", 1)[0].split("/").at(-1)!)) return undefined;
-  for (const prefix of gatewayPrefixes.get(model.slice(0, slash)) ?? []) {
-    // Do not reimport a different gateway's price through a generated bare alias.
-    if (!prefix && (rest.includes("/") || inferredBareKeys.get(table)?.has(rest.split("[", 1)[0]))) continue;
-    const rate = lookupRate(table, prefix + rest);
-    if (rate) return rate;
+  const base = withoutSnapshotDate(rest);
+  for (const target of [provider, ...(channelAliases.get(provider) ?? [])]) {
+    const exact = table.get(`${target}/${rest}`);
+    if (exact) return exact;
+    if (base !== rest) {
+      const fallback = table.get(`${target}/${base}`);
+      if (fallback) return fallback;
+    }
   }
   return undefined;
 }
 
-function ratesAt(rate: ModelRate, speed: UsageRecord["speed"], totals: UsageRecord["totals"]): TokenRates {
+function ratesAt(
+  rate: ModelRate,
+  speed: UsageRecord["speed"],
+  totals: UsageRecord["totals"],
+  timestampMs: number | undefined
+): TokenRates {
   const prompt = totals.uncachedInputTokens + totals.cachedInputTokens + totals.cacheCreationTokens;
   const tier = rate.tiers.find(({ threshold }) => prompt > threshold)?.rates;
-  return tier?.[speed] ?? rate[speed] ?? tier?.standard ?? rate.standard;
+  const selected = tier?.standard ?? rate.standard;
+  return scaleTokenRates(selected, multiplierFactor(rate.multipliers, timestampMs, speed));
 }
 
 type PricedRecord = Pick<UsageRecord, "model" | "rateModel" | "totals" | "cacheCreation1hTokens" | "speed" | "reportedCostUsd"> &
-  Partial<Pick<UsageRecord, "provider">>;
+  Partial<Pick<UsageRecord, "provider" | "timestampMs">>;
+
 export interface OpenCodePriceTables {
   readonly userRates: RateTable;
-  readonly catalogRates: RateTable;
 }
 
 export interface UsagePriceContext {
   readonly overrides?: RateTable;
   readonly opencodeUserRates?: RateTable;
-  readonly opencodeCatalogRates?: RateTable;
+}
+
+interface ResolvedModelRate {
+  readonly rate: ModelRate;
+  readonly explicit: boolean;
+  readonly custom: boolean;
+}
+
+function resolveRate(
+  table: RateTable,
+  record: PricedRecord,
+  options?: UsagePriceContext
+): ResolvedModelRate | null {
+  const key = keyFor(record.model);
+  const slash = key.indexOf("/");
+  const overrideRate = options?.overrides?.get(key);
+  if (overrideRate) return { rate: overrideRate, explicit: true, custom: true };
+  // OpenCode config overrides are private relay prices and stay channel-exact.
+  const userRate = record.provider === "opencode" || slash >= 0
+    ? options?.opencodeUserRates?.get(key)
+    : undefined;
+  if (userRate) return { rate: userRate, explicit: true, custom: false };
+  const rate = slash >= 0
+    ? lookupQualifiedRate(table, key, slash)
+    : (record.rateModel === undefined ? undefined : lookupRate(table, record.rateModel)) ??
+      lookupRate(table, record.model) ??
+      (withoutSnapshotDate(key) !== key ? table.get(withoutSnapshotDate(key)) : undefined);
+  return rate ? { rate, explicit: false, custom: false } : null;
+}
+
+function dateOnly(condition: RateCondition): boolean {
+  const keys = Object.keys(condition);
+  if (!keys.length) return false;
+  if (!keys.every((key) => key === "date" || key === "all")) return false;
+  return !condition.all || condition.all.every(dateOnly);
+}
+
+/** Scheduled price changes already in effect are folded into the shown unit price. */
+function dateFactor(rules: readonly RateMultiplier[], timestampMs: number): number {
+  const dated = rules.filter((rule) => dateOnly(rule.when));
+  return multiplierFactor(dated, timestampMs);
+}
+
+export function describeRecordRate(
+  table: RateTable,
+  record: PricedRecord,
+  context?: RateTable | UsagePriceContext
+): UsageModelPrice | undefined {
+  const options = context && "get" in context ? { overrides: context } : context;
+  const resolved = resolveRate(table, record, options);
+  if (!resolved) return undefined;
+  const perMillion = (value: number): number => Number((value * 1e6).toPrecision(10));
+  const factor = dateFactor(resolved.rate.multipliers, Date.now());
+  const rate = (rates: TokenRates): UsageCategoryCost => scaleTokenRates(rates, factor);
+  const standard = rate(resolved.rate.standard);
+  const tiers = resolved.rate.tiers.map(({ threshold, rates }) => {
+    const priced = rate(rates.standard);
+    return {
+      threshold,
+      inputCostPerMillionTokens: perMillion(priced.input),
+      outputCostPerMillionTokens: perMillion(priced.output),
+      cacheReadCostPerMillionTokens: perMillion(priced.cacheRead),
+      cacheWriteCostPerMillionTokens: perMillion(priced.cacheWrite),
+    };
+  });
+  return {
+    inputCostPerMillionTokens: perMillion(standard.input),
+    outputCostPerMillionTokens: perMillion(standard.output),
+    cacheReadCostPerMillionTokens: perMillion(standard.cacheRead),
+    cacheWriteCostPerMillionTokens: perMillion(standard.cacheWrite),
+    ...(resolved.custom ? { custom: true } : {}),
+    ...(tiers.length ? { tiers } : {}),
+    ...(resolved.rate.multipliers.length ? { multipliers: [...resolved.rate.multipliers] } : {}),
+  };
 }
 
 function categoryCosts(record: PricedRecord, rates: TokenRates): UsageCategoryCost {
@@ -222,16 +191,9 @@ export function priceUsage(table: RateTable, record: PricedRecord, context?: Rat
   cacheSavingsUsd: number;
 } {
   const options = context && "get" in context ? { overrides: context } : context;
-  const key = keyFor(record.model);
-  const slash = key.indexOf("/");
-  const explicitRate = options?.overrides?.get(key) ??
-    (record.provider === "opencode" || slash >= 0 ? options?.opencodeUserRates?.get(key) : undefined);
-  const reported = explicitRate ? null : amount(record.reportedCostUsd);
-  const rate = explicitRate ?? (slash >= 0
-    ? options?.opencodeCatalogRates?.get(key) ?? lookupQualifiedRate(table, key, slash)
-    : (record.rateModel === undefined ? undefined : lookupRate(table, record.rateModel)) ??
-      lookupRate(table, record.model));
-  if (!rate) {
+  const resolved = resolveRate(table, record, options);
+  const reported = resolved?.explicit ? null : amount(record.reportedCostUsd);
+  if (!resolved) {
     // A provider total that cannot be split across token categories is not an estimate.
     if (reported === 0) {
       return { costUsd: 0, costSource: "providerReported",
@@ -240,7 +202,8 @@ export function priceUsage(table: RateTable, record: PricedRecord, context?: Rat
     }
     return { costUsd: 0, costSource: "unpriced", categoryCostUsd: null, speedPremiumUsd: 0, cacheSavingsUsd: 0 };
   }
-  const selected = ratesAt(rate, record.speed, record.totals);
+  const rate = resolved.rate;
+  const selected = ratesAt(rate, record.speed, record.totals, record.timestampMs);
   const costs = categoryCosts(record, selected);
   const sum = (c: UsageCategoryCost) => c.input + c.output + c.cacheRead + c.cacheWrite;
   const listCost = sum(costs);
@@ -260,7 +223,7 @@ export function priceUsage(table: RateTable, record: PricedRecord, context?: Rat
       cacheRead: costs.cacheRead * scale, cacheWrite: costs.cacheWrite * scale,
     },
     speedPremiumUsd: record.speed === "standard"
-      ? 0 : (listCost - sum(categoryCosts(record, ratesAt(rate, "standard", record.totals)))) * scale,
+      ? 0 : (listCost - sum(categoryCosts(record, ratesAt(rate, "standard", record.totals, record.timestampMs)))) * scale,
     cacheSavingsUsd,
   };
 }
@@ -269,70 +232,13 @@ function result(rates: RateTable, status: UsagePricing["status"], source: string
   return { rates, status: { status, source, fetchedAt, knownModels: rates.size } };
 }
 
-async function readLocal(path: string): Promise<PricingResult | null> {
-  try {
-    const snapshot: unknown = JSON.parse(await readFile(path, "utf8"));
-    if (!isObject(snapshot)) return null;
-    const rates = parseRateTable(snapshot.rates);
-    if (rates.size === 0) return null;
-    const source = typeof snapshot.source === "string" && snapshot.source.trim() ? snapshot.source : URL;
-    const fetchedAt = typeof snapshot.fetchedAt === "string" && Number.isFinite(Date.parse(snapshot.fetchedAt))
-      ? snapshot.fetchedAt : null;
-    return result(rates, "cached", source, fetchedAt);
-  } catch {
-    return null;
-  }
-}
-
-async function refresh(userData: string, cachePath: string): Promise<PricingResult | null> {
-  try {
-    const response = await fetch(URL, { signal: AbortSignal.timeout(TIMEOUT_MS) });
-    if (!response.ok) return null;
-    const document: unknown = await response.json();
-    const rates = parseRateTable(document);
-    if (rates.size === 0) return null;
-    const fetchedAt = new Date().toISOString();
-    const partial = `${cachePath}.${randomUUID()}.tmp`;
-    try {
-      await mkdir(userData, { recursive: true });
-      await writeFile(partial, JSON.stringify({ source: URL, fetchedAt, rates: document }), "utf8");
-      await rename(partial, cachePath);
-    } catch {
-      await rm(partial, { force: true }).catch(() => {});
-    }
-    return result(rates, "fresh", URL, fetchedAt);
-  } catch {
-    return null;
-  }
-}
-
-const pending = new Map<string, Promise<PricingResult | null>>();
-const retryAfter = new Map<string, number>();
-const recent = new Map<string, PricingResult>();
-function isFresh(pricing: PricingResult): boolean {
-  if (pricing.status.fetchedAt === null) return false;
-  const age = Date.now() - Date.parse(pricing.status.fetchedAt);
-  return age >= 0 && age < TTL_MS;
-}
-
-export async function loadPricing(userData: string, fallbackPath: string): Promise<PricingResult> {
-  const cachePath = join(userData, "litellm-rates-cache.json");
-  const last = recent.get(cachePath);
-  if (last && isFresh(last)) return last;
-  const cached = await readLocal(cachePath);
-  if (cached && isFresh(cached)) return cached;
-  const local = cached ?? last ?? await readLocal(fallbackPath);
-  // Another caller may have finished a refresh while this caller read local files.
-  const latest = recent.get(cachePath);
-  if (latest && isFresh(latest)) return latest;
-  let update = pending.get(cachePath);
-  if (!update && Date.now() >= (retryAfter.get(cachePath) ?? 0)) {
-    update = refresh(userData, cachePath).then((fresh) => {
-      if (fresh) recent.set(cachePath, fresh);
-      else retryAfter.set(cachePath, Date.now() + 60_000);
-      return fresh;
-    }).finally(() => pending.delete(cachePath));
-    pending.set(cachePath, update);
-  }
-  return local ?? await update ?? result(new Map(), "unavailable", URL, null);
+/**
+ * The one official catalog source. A fresh local snapshot answers instantly;
+ * an expired cache or the bundled snapshot answers the first frame while the
+ * main process refreshes in the background.
+ */
+export async function loadPricing(userData: string, bundledSnapshot: string): Promise<PricingResult> {
+  const snapshot = await loadModelsDevSnapshot({ userData, bundledSnapshot });
+  if (!snapshot) return result(new Map(), "unavailable", "https://models.dev/api.json", null);
+  return result(buildRateTable(snapshot), "cached", snapshot.source, snapshot.fetchedAt);
 }

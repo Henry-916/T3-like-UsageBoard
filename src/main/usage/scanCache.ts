@@ -9,11 +9,13 @@ const fileEntry = z.object({
   root: z.string(),
   fingerprint: z.string(),
   models: z.array(z.tuple([z.number(), z.string().nullable()])).optional(),
+  // Last scanned rowid per SQLite message table, for opencode.db only.
+  cursors: z.record(z.string(), z.number().int().nonnegative()).optional(),
   records: z.array(usageRecordSchema)
 })
 export type ScanCacheEntry = z.infer<typeof fileEntry>
 const cacheFile = 'scan-cache.json'
-const cacheVersion = 3
+const cacheVersion = 4
 
 export async function readScanCache(userData: string): Promise<Map<string, ScanCacheEntry>> {
   try {

@@ -1,13 +1,15 @@
 import { normalizeModelId } from "../../shared/modelNormalize";
 import {
   EMPTY_TOTALS,
+  modelPriceKey,
   totalTokens,
   type PriceOverrides,
   type UsageBucket,
+  type UsageModelPrice,
   type UsageRecord,
   type UsageSummaryInput,
 } from "../../shared/types";
-import { createOverrideRateTable, priceUsage, type OpenCodePriceTables, type PricingResult } from "./pricing";
+import { createOverrideRateTable, describeRecordRate, priceUsage, type OpenCodePriceTables, type PricingResult } from "./pricing";
 
 const HOUR_MS = 3_600_000;
 const SLOT_MS = 900_000;
@@ -80,12 +82,12 @@ export function aggregateUsage(
   pricing: PricingResult,
   overrides: PriceOverrides,
   opencodePricing?: OpenCodePriceTables,
+  modelPrices?: Map<string, UsageModelPrice>,
 ): UsageBucket[] {
   const window = createUsageWindow(query);
   const priceContext = {
     overrides: createOverrideRateTable(overrides),
     opencodeUserRates: opencodePricing?.userRates,
-    opencodeCatalogRates: opencodePricing?.catalogRates,
   };
   const buckets = new Map<string, MutableBucket>();
   const keyed = new Map<string, UsageRecord>();
@@ -109,6 +111,13 @@ export function aggregateUsage(
       buckets.set(key, bucket);
     }
     const priced = priceUsage(pricing.rates, record, priceContext);
+    if (modelPrices) {
+      const key = modelPriceKey(record.provider, model);
+      if (!modelPrices.has(key)) {
+        const summary = describeRecordRate(pricing.rates, record, priceContext);
+        if (summary) modelPrices.set(key, summary);
+      }
+    }
     const { totals } = bucket;
     totals.uncachedInputTokens += record.totals.uncachedInputTokens;
     totals.cachedInputTokens += record.totals.cachedInputTokens;

@@ -3,19 +3,36 @@ import { join } from 'node:path'
 import { discoverAccounts, pathKey, providers } from '../accounts/discovery'
 import { readConfig } from '../configStore'
 import { usageSummaryInputSchema } from '../../shared/types'
-import type { UsageProviderKind, UsageRecord, UsageSource, UsageSummary, UsageSummaryInput } from '../../shared/types'
+import type { UsageModelPrice, UsageProviderKind, UsageRecord, UsageSource, UsageSummary, UsageSummaryInput } from '../../shared/types'
 import { aggregateUsage, createUsageWindowFilter, mergeUsageCopies } from './aggregation'
 import { loadOpenCodePricing } from './opencodePricing'
 import { loadPricePresets } from './pricePresets'
 import { loadPricing } from './pricing'
 import { fileFingerprint, readScanCache, writeScanCache } from './scanCache'
+import type { ScanCacheEntry } from './scanCache'
 import { mergeAntigravityRecords, scanAntigravityDatabase } from './readers/antigravity'
 import { readClaudeFile } from './readers/claude'
 import { readCodexFile } from './readers/codex'
-import { readOpenCodeDatabase, readOpenCodeJson } from './readers/opencode'
+import { readOpenCodeDatabase, readOpenCodeDatabaseIncremental, readOpenCodeJson } from './readers/opencode'
 
 const DAY_MS = 86_400_000
 type Reader = (file: string, cutoffMs?: number) => Promise<UsageRecord[]>
+
+/** Merge incrementally appended rows into the retained 92-day cache window. */
+function mergeIncremental(
+  previous: readonly UsageRecord[],
+  added: readonly UsageRecord[],
+  cutoff: number
+): UsageRecord[] {
+  const merged = new Map<string, UsageRecord>()
+  const anonymous: UsageRecord[] = []
+  for (const record of [...previous, ...added]) {
+    if (record.timestampMs < cutoff) continue
+    if (record.dedupeKey === null) anonymous.push(record)
+    else merged.set(record.dedupeKey, record)
+  }
+  return [...merged.values(), ...anonymous]
+}
 interface Candidate {
   path: string
   sqlite: boolean
@@ -80,23 +97,53 @@ async function* filesFor(
 
 export interface UsageServiceOptions {
   userData: string
-  fallbackRates: string
+  bundledSnapshot: string
   home?: string
   env?: NodeJS.ProcessEnv
   now?: () => number
 }
 
-export function createUsageService({ userData, fallbackRates, home, env, now = Date.now }: UsageServiceOptions) {
-  // Serialize writes, but let concurrent filter/tab requests share one scan.
-  let scanInFlight: ReturnType<typeof scan> | undefined
-  let snapshot: Awaited<ReturnType<typeof scan>> | undefined
+export function createUsageService({ userData, bundledSnapshot, home, env, now = Date.now }: UsageServiceOptions) {
+  type ScanResult = Awaited<ReturnType<typeof scan>>
+  let snapshot: ScanResult | undefined
+  let fullScan: Promise<ScanResult> | undefined
+  const providerScans = new Map<UsageProviderKind, Promise<ScanResult>>()
+  // Incremented when a provider scan starts; a full scan preserves providers
+  // whose local refresh started after it did.
+  const providerEpoch = new Map<UsageProviderKind, number>()
+  const providerApplied = new Map<UsageProviderKind, number>()
+  let scanSequence = 0
+  let lastFullApplied = 0
+  let cacheWrites: Promise<void> = Promise.resolve()
 
-  async function scan() {
+  // Cache writes are serialized and per-provider writes merge into the newest
+  // file, so a concurrent full scan cannot silently drop a local refresh.
+  function enqueueCacheWrite(task: () => Promise<void>): Promise<void> {
+    const next = cacheWrites.then(task, task).catch(() => {
+      console.warn('T3-like UsageBoard: unable to save scan cache')
+    })
+    cacheWrites = next
+    return next
+  }
+
+  async function persistProviderCache(cache: Map<string, ScanCacheEntry>, provider: UsageProviderKind) {
+    const latest = await readScanCache(userData)
+    for (const key of [...latest.keys()]) {
+      if (latest.get(key)?.provider === provider && !cache.has(key)) latest.delete(key)
+    }
+    for (const [key, entry] of cache) {
+      if (entry.provider === provider) latest.set(key, entry)
+    }
+    await writeScanCache(userData, latest)
+  }
+
+  async function scan(onlyProvider?: UsageProviderKind) {
     const started = performance.now()
     const readAt = new Date(now()).toISOString()
     const cutoff = Date.parse(readAt) - 92 * DAY_MS
+    const previous = onlyProvider ? snapshot : undefined
     const [cache, config, pricing] = await Promise.all([
-      readScanCache(userData), readConfig(userData), loadPricing(userData, fallbackRates)
+      readScanCache(userData), readConfig(userData), loadPricing(userData, bundledSnapshot)
     ])
     const accounts = await discoverAccounts(config, { home, env })
     const sources: UsageSource[] = []
@@ -104,6 +151,8 @@ export function createUsageService({ userData, fallbackRates, home, env, now = D
     let dirty = false
 
     for (const provider of providers) {
+      // A single-provider refresh keeps the other three straight from memory.
+      if (previous && provider !== onlyProvider) continue;
       const roots = new Map<string, { dir: string; allowDirect: boolean }>()
       for (const account of accounts) {
         if ((account.origin === 'manual' && !account.enabled) || account.provider !== provider || !account.dataDir) continue
@@ -143,14 +192,22 @@ export function createUsageService({ userData, fallbackRates, home, env, now = D
               collect(held.records, held.models)
               continue
             }
-            const { records: fresh, models } = file.read
-              ? { records: await file.read(canonical, cutoff), models: undefined }
-              : await scanAntigravityDatabase(canonical)
-            const retained = provider === 'antigravity' ? fresh : fresh.filter(item => item.timestampMs >= cutoff)
-            cache.set(key, { provider, root, fingerprint, records: retained, models })
+            const read: { records: UsageRecord[]; cursors?: Record<string, number>; models?: [number, string | null][] } =
+              file.read === readOpenCodeDatabase
+                ? await readOpenCodeDatabaseIncremental(canonical, cutoff, held?.cursors)
+                : file.read
+                  ? { records: await file.read(canonical, cutoff), cursors: undefined }
+                  : { ...await scanAntigravityDatabase(canonical), cursors: undefined }
+            const fresh = read.records
+            let retained = provider === 'antigravity' ? fresh : fresh.filter(item => item.timestampMs >= cutoff)
+            if (read.cursors && held) retained = mergeIncremental(held.records, retained, cutoff)
+            cache.set(key, {
+              provider, root, fingerprint, records: retained, models: read.models,
+              ...(read.cursors ? { cursors: read.cursors } : {}),
+            })
             dirty = true
             scannedFiles++
-            collect(retained, models)
+            collect(retained, read.models)
           } catch {
             stats.errors++
             if (held) collect(held.records, held.models)
@@ -180,40 +237,142 @@ export function createUsageService({ userData, fallbackRates, home, env, now = D
           : scannedFiles || skippedFiles || merged.length ? 'ok' : 'missing'
       })
     }
-    if (dirty) await writeScanCache(userData, cache).catch(() => console.warn('T3-like UsageBoard: unable to save scan cache'))
+    if (previous) {
+      for (const provider of providers) {
+        if (provider === onlyProvider) continue
+        byProvider.set(provider, previous.byProvider.get(provider) ?? [])
+        const held = previous.sources.find(source => source.provider === provider)
+        if (held) sources.push(held)
+      }
+    }
+    if (dirty) {
+      await enqueueCacheWrite(() => onlyProvider
+        ? persistProviderCache(cache, onlyProvider)
+        : writeScanCache(userData, cache))
+    }
     return { byProvider, sources, pricing, readAt, elapsed: Math.round(performance.now() - started) }
   }
 
-  return {
-    async getSummary(input: UsageSummaryInput, refresh = false): Promise<UsageSummary> {
-      const query = usageSummaryInputSchema.parse(input)
-      if ((!snapshot || refresh) && !scanInFlight) {
-        scanInFlight = scan().then(result => { snapshot = result; return result })
-          .finally(() => { scanInFlight = undefined })
+  function mergeProviderResult(result: ScanResult, provider: UsageProviderKind): ScanResult {
+    const current = snapshot
+    if (!current) return result
+    const byProvider = new Map(current.byProvider)
+    byProvider.set(provider, result.byProvider.get(provider) ?? [])
+    const sources = [...current.sources]
+    const replacement = result.sources.find((source) => source.provider === provider)
+    if (replacement) {
+      const index = sources.findIndex((source) => source.provider === provider)
+      if (index >= 0) sources[index] = replacement
+      else sources.push(replacement)
+    }
+    return {
+      ...current, byProvider, sources,
+      pricing: result.pricing, readAt: result.readAt, elapsed: result.elapsed,
+    }
+  }
+
+  /** A local refresh never waits for a background full scan. */
+  async function refreshProviderSnapshot(provider: UsageProviderKind): Promise<ScanResult> {
+    if (!snapshot) return refreshAll()
+    const start = ++scanSequence
+    const epoch = (providerEpoch.get(provider) ?? 0) + 1
+    providerEpoch.set(provider, epoch)
+    const task = scan(provider)
+    providerScans.set(provider, task)
+    let result: ScanResult
+    try {
+      result = await task
+    } finally {
+      if (providerScans.get(provider) === task) providerScans.delete(provider)
+    }
+    // A full scan that started later and already applied is newer.
+    if (lastFullApplied > start) return snapshot ?? result
+    if ((providerEpoch.get(provider) ?? 0) !== epoch) return snapshot ?? result
+    snapshot = mergeProviderResult(result, provider)
+    providerApplied.set(provider, epoch)
+    return snapshot
+  }
+
+  async function refreshAllNow(): Promise<ScanResult> {
+    const start = ++scanSequence
+    const startEpoch = new Map(providerEpoch)
+    const result = await scan()
+    const started = providers.filter(provider =>
+      (providerEpoch.get(provider) ?? 0) > (startEpoch.get(provider) ?? 0))
+    if (started.length) {
+      // Wait for local scans that were already newer than this full pass.
+      await Promise.all(started.map(provider => providerScans.get(provider)?.catch(() => undefined)))
+    }
+    // Only a scan that actually merged is newer; a failed one leaves the full result.
+    const newer = providers.filter(provider =>
+      (providerApplied.get(provider) ?? 0) > (startEpoch.get(provider) ?? 0))
+    lastFullApplied = start
+    let merged = result
+    if (snapshot) {
+      // Preserve any provider whose local scan began after this full pass.
+      const byProvider = new Map(result.byProvider)
+      const sources = [...result.sources]
+      for (const provider of newer) {
+        if (snapshot.byProvider.has(provider)) byProvider.set(provider, snapshot.byProvider.get(provider)!)
+        const source = snapshot.sources.find((entry) => entry.provider === provider)
+        if (source) {
+          const index = sources.findIndex((entry) => entry.provider === provider)
+          if (index >= 0) sources[index] = source
+          else sources.push(source)
+        }
       }
+      merged = { ...result, byProvider, sources }
+    }
+    snapshot = merged
+    return merged
+  }
+
+  function refreshAll(): Promise<ScanResult> {
+    if (!fullScan) {
+      const task = refreshAllNow()
+      fullScan = task
+      void task.finally(() => { if (fullScan === task) fullScan = undefined })
+    }
+    return fullScan
+  }
+
+  return {
+    async getSummary(input: UsageSummaryInput, refresh = false, refreshProvider?: UsageProviderKind): Promise<UsageSummary> {
+      const query = usageSummaryInputSchema.parse(input)
       const [result, config, opencodePricing] = await Promise.all([
-        refresh ? (scanInFlight ?? snapshot!) : (snapshot ?? scanInFlight!), readConfig(userData),
+        refresh
+          ? (refreshProvider && snapshot ? refreshProviderSnapshot(refreshProvider) : refreshAll())
+          : (snapshot ?? refreshAll()),
+        readConfig(userData),
         loadOpenCodePricing({ home, env })
       ])
       const filter = createUsageWindowFilter(query)
       const records: UsageRecord[] = []
-      const sources = result.sources.map(source => {
+      const distinct = new Map<UsageProviderKind, number>()
+      for (const source of result.sources) {
         const sessions = new Set<string>()
         for (const record of result.byProvider.get(source.provider) ?? []) {
           if (!filter(record.timestampMs)) continue
           records.push(record)
           if (record.sessionId) sessions.add(record.sessionId)
         }
-        return { ...source, distinctSessions: sessions.size }
+        distinct.set(source.provider, sessions.size)
+      }
+      // Keep the canonical provider order even when one source was reused.
+      const sources = providers.flatMap(provider => {
+        const source = result.sources.find(entry => entry.provider === provider)
+        return source ? [{ ...source, distinctSessions: distinct.get(provider) ?? 0 }] : []
       })
+      const modelPriceMap = new Map<string, UsageModelPrice>()
+      const buckets = aggregateUsage(records, query, result.pricing, config.priceOverrides, opencodePricing, modelPriceMap)
       return {
         readAt: result.readAt, timeZone: query.timeZone, sinceDay: query.sinceDay, untilDay: query.untilDay,
-        buckets: aggregateUsage(records, query, result.pricing, config.priceOverrides, opencodePricing),
-        sources, pricing: result.pricing.status, scanDurationMs: result.elapsed
+        buckets, sources, pricing: result.pricing.status, scanDurationMs: result.elapsed,
+        modelPrices: Object.fromEntries(modelPriceMap)
       }
     },
     getPricePresets() {
-      return loadPricePresets({ userData })
+      return loadPricePresets({ userData, bundledSnapshot })
     }
   }
 }

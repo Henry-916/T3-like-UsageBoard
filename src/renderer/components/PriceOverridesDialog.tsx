@@ -1,6 +1,7 @@
-import { ChevronDown, Plus, X } from 'lucide-react'
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import type { PriceOverrides, PricePreset, PricingSettings } from '../../shared/types'
+import { ChevronDown, Clock, Plus, X } from 'lucide-react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { describePeakSchedules, timeScheduleMultipliers } from '../../shared/pricingMultipliers'
+import type { PriceOverrides, PricePreset, PricingSettings, RateMultiplier } from '../../shared/types'
 import { UsageDialog } from './UsageDialog'
 
 export const priceFields = [
@@ -10,7 +11,53 @@ export const priceFields = [
   ['cacheWriteCostPerMillionTokens', '缓存创建']
 ] as const
 export type PriceKey = (typeof priceFields)[number][0]
-export type PriceRow = { id: number; model: string; rates: Partial<Record<PriceKey, string>>; isNew?: boolean }
+export type PriceRow = {
+  id: number
+  model: string
+  rates: Partial<Record<PriceKey, string>>
+  isNew?: boolean
+  multipliers?: RateMultiplier[]
+  multipliersEnabled?: boolean
+}
+
+function localTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone
+}
+
+function formatUsd(value: number): string {
+  return `$${Number(value.toPrecision(6))}`
+}
+
+function peakPriceLine(preset: PricePreset, factor: number): string {
+  const fields: [string, number | undefined][] = [
+    ['入', preset.inputCostPerMillionTokens],
+    ['出', preset.outputCostPerMillionTokens],
+    ['读', preset.cacheReadCostPerMillionTokens],
+    ['创', preset.cacheWriteCostPerMillionTokens]
+  ]
+  return fields.flatMap(([label, value]) => typeof value === 'number'
+    ? [`${label} ${formatUsd(value * factor)}`] : []).join(' · ')
+}
+
+function presetPeakText(preset: PricePreset, timeZone: string): string {
+  return describePeakSchedules(preset.multipliers, timeZone)
+    .map(({ schedule, factor }) => `${schedule} ×${factor}\n${peakPriceLine(preset, factor)}`)
+    .join('\n')
+}
+
+function rowPeakPriceLine(row: PriceRow, factor: number): string {
+  const fields: [string, PriceKey][] = [
+    ['入', 'inputCostPerMillionTokens'],
+    ['出', 'outputCostPerMillionTokens'],
+    ['读', 'cacheReadCostPerMillionTokens'],
+    ['创', 'cacheWriteCostPerMillionTokens']
+  ]
+  return fields.flatMap(([label, key]) => {
+    const raw = row.rates[key]?.trim()
+    const value = raw ? Number(raw) : NaN
+    return Number.isFinite(value) ? [`${label} ${formatUsd(value * factor)}`] : []
+  }).join(' · ')
+}
 
 const EFFORT_SUFFIX = /-(?:extra-low|low|medium|high|tiered|control|thinking|agent|orchestrator)$/
 const SNAPSHOT_SUFFIX = /-(?:20\d{2}-\d{2}-\d{2}|20\d{6}|\d{4})$/
@@ -213,11 +260,15 @@ function initialRows(settings: PricingSettings, initialModel?: string): PriceRow
   const models = Object.keys(settings.priceOverrides).sort()
   const rows: PriceRow[] = models.map((model, id) => {
     const saved = settings.priceOverrides[model]
+    const peaks = timeScheduleMultipliers(saved?.multipliers)
     return {
       id,
       model,
       rates: Object.fromEntries(priceFields.flatMap(([key]) =>
-        saved?.[key] === undefined ? [] : [[key, String(saved[key])]]))
+        saved?.[key] === undefined ? [] : [[key, String(saved[key])]])),
+      ...(peaks.length
+        ? { multipliers: peaks, multipliersEnabled: saved?.multipliersEnabled !== false }
+        : {})
     }
   })
   if (initialModel && !models.includes(initialModel)) {
@@ -253,17 +304,21 @@ function parseRows(rows: readonly PriceRow[]): { settings: PricingSettings; erro
     if (rates.inputCostPerMillionTokens === undefined || rates.outputCostPerMillionTokens === undefined) {
       return { error: `请为 ${model} 同时填写输入和输出单价。` }
     }
+    const multipliers = row.multipliers ?? []
     overrides.set(model, {
       ...rates,
       inputCostPerMillionTokens: rates.inputCostPerMillionTokens,
-      outputCostPerMillionTokens: rates.outputCostPerMillionTokens
+      outputCostPerMillionTokens: rates.outputCostPerMillionTokens,
+      ...(multipliers.length
+        ? { multipliers, multipliersEnabled: row.multipliersEnabled !== false }
+        : {})
     })
   }
   return { settings: { priceOverrides: Object.fromEntries(overrides) } }
 }
 
 export function applyPresetToRow(row: PriceRow, preset: PricePreset): PriceRow {
-  return {
+  const next: PriceRow = {
     ...row,
     model: row.model,
     rates: {
@@ -275,6 +330,15 @@ export function applyPresetToRow(row: PriceRow, preset: PricePreset): PriceRow {
         ? '' : String(preset.cacheWriteCostPerMillionTokens)
     }
   }
+  const peaks = timeScheduleMultipliers(preset.multipliers)
+  if (peaks.length) {
+    next.multipliers = peaks
+    next.multipliersEnabled = true
+  } else {
+    delete next.multipliers
+    delete next.multipliersEnabled
+  }
+  return next
 }
 
 function formatPresetRate(value: number): string {
@@ -311,6 +375,17 @@ function placePresetMenu(panel: HTMLDivElement, anchor: HTMLElement) {
 
 type PresetTip = {
   text: string
+  kind: 'name' | 'peak'
+  rect: { left: number; top: number; bottom: number }
+  below: boolean
+  left?: number
+  top?: number
+}
+
+type PeakTip = {
+  rowId: number
+  entries: { schedule: string; factor: number; prices: string }[]
+  enabled: boolean
   rect: { left: number; top: number; bottom: number }
   below: boolean
   left?: number
@@ -331,6 +406,7 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
   const [presetQuery, setPresetQuery] = useState('')
   const [activePreset, setActivePreset] = useState(0)
   const [presetTip, setPresetTip] = useState<PresetTip | null>(null)
+  const [peakTip, setPeakTip] = useState<PeakTip | null>(null)
   const nextId = useRef(0)
   const focusRow = useRef<number | null>(null)
   const pickerAnchor = useRef<HTMLButtonElement | null>(null)
@@ -338,6 +414,7 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
   const activePresetOption = useRef<HTMLButtonElement>(null)
   const searchInput = useRef<HTMLInputElement>(null)
   const presetTipRef = useRef<HTMLSpanElement>(null)
+  const peakTipRef = useRef<HTMLSpanElement>(null)
   const selectSearchOnOpen = useRef(false)
   const tableWrap = useRef<HTMLDivElement>(null)
   const dialogBody = useRef<HTMLDivElement>(null)
@@ -378,6 +455,7 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
     setPickerRowId(null)
     setPresetQuery('')
     setPresetTip(null)
+    setPeakTip(null)
     if (restoreFocus) pickerAnchor.current?.focus()
   }, [])
 
@@ -428,9 +506,56 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
     const below = presetTip.rect.top - tipHeight - 4 < 8
     const top = Math.round(below ? presetTip.rect.bottom + 4 : presetTip.rect.top - tipHeight - 4)
     if (presetTip.left !== left || presetTip.top !== top || presetTip.below !== below) {
-      setPresetTip((current) => current?.text === presetTip.text ? { ...current, left, top, below } : current)
+      setPresetTip((current) => current?.text === presetTip.text && current.kind === presetTip.kind
+        ? { ...current, left, top, below } : current)
     }
   }, [presetTip])
+
+  useLayoutEffect(() => {
+    const tip = peakTipRef.current
+    if (!peakTip || !tip) return
+    const left = Math.round(Math.min(
+      Math.max(8, peakTip.rect.left),
+      Math.max(8, window.innerWidth - tip.offsetWidth - 8)
+    ))
+    const below = peakTip.rect.top - tip.offsetHeight - 6 < 8
+    const top = Math.round(below ? peakTip.rect.bottom + 6 : peakTip.rect.top - tip.offsetHeight - 6)
+    if (peakTip.left !== left || peakTip.top !== top || peakTip.below !== below) {
+      setPeakTip((current) => current?.rowId === peakTip.rowId
+        ? { ...current, left, top, below } : current)
+    }
+  }, [peakTip])
+
+  // Escape only dismisses this floating bubble, never the whole dialog.
+  useEffect(() => {
+    if (!peakTip) return
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      setPeakTip(null)
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [peakTip])
+
+  const peakTipOpen = peakTip !== null
+  useEffect(() => {
+    if (!peakTipOpen) return
+    const clear = () => setPeakTip(null)
+    const scroller = tableWrap.current
+    const bodyScroller = dialogBody.current
+    window.addEventListener('resize', clear)
+    window.addEventListener('blur', clear)
+    scroller?.addEventListener('scroll', clear, { passive: true })
+    bodyScroller?.addEventListener('scroll', clear, { passive: true })
+    return () => {
+      window.removeEventListener('resize', clear)
+      window.removeEventListener('blur', clear)
+      scroller?.removeEventListener('scroll', clear)
+      bodyScroller?.removeEventListener('scroll', clear)
+    }
+  }, [peakTipOpen])
 
   function edit(id: number, update: (row: PriceRow) => PriceRow) {
     setRows((list) => list?.map((row) => row.id === id ? update(row) : row) ?? null)
@@ -444,9 +569,37 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
   }
   function removeRow(row: PriceRow) {
     if (pickerRowId === row.id) closePicker(false)
+    if (peakTip?.rowId === row.id) setPeakTip(null)
     setRows((list) => list?.filter(({ id }) => row.id !== id) ?? null)
     if (!row.isNew) setChanged(true)
     setError('')
+  }
+  function togglePeak(row: PriceRow, button: HTMLButtonElement) {
+    edit(row.id, (item) => ({ ...item, multipliersEnabled: item.multipliersEnabled === false }))
+    const next = { ...row, multipliersEnabled: row.multipliersEnabled === false }
+    const tip = rowPeakTip(next, button.getBoundingClientRect())
+    setPeakTip(tip)
+  }
+  function rowPeakTip(
+    row: PriceRow,
+    rect: { left: number; top: number; bottom: number }
+  ): PeakTip | null {
+    const entries = describePeakSchedules(row.multipliers, localTimeZone()).map(({ schedule, factor }) => ({
+      schedule,
+      factor,
+      prices: rowPeakPriceLine(row, factor),
+    }))
+    if (!entries.length) return null
+    return {
+      rowId: row.id,
+      entries,
+      enabled: row.multipliersEnabled !== false,
+      rect,
+      below: false,
+    }
+  }
+  function showRowPeakTip(row: PriceRow, button: HTMLButtonElement) {
+    setPeakTip(rowPeakTip(row, button.getBoundingClientRect()))
   }
   function openPicker(row: PriceRow, button: HTMLButtonElement) {
     if (pickerRowId === row.id && presetMenu.current?.matches(':popover-open')) {
@@ -457,6 +610,7 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
     pickerAnchor.current = button
     selectSearchOnOpen.current = initialQuery !== ''
     setPresetTip(null)
+    setPeakTip(null)
     setPresetQuery(initialQuery)
     setActivePreset(0)
     setPickerRowId(row.id)
@@ -466,7 +620,7 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
     edit(pickerRowId, (row) => applyPresetToRow(row, preset))
     closePicker()
   }
-  function onPresetKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+  function onPresetKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.key === 'Escape') {
       event.preventDefault()
       event.stopPropagation()
@@ -547,13 +701,33 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
                     {rows.map((row) => {
                       const model = row.model || '新模型'
                       const pickingHere = pickerRowId === row.id
+                      const enabled = row.multipliersEnabled !== false
+                      const peaks = timeScheduleMultipliers(row.multipliers)
                       return (
                         <tr key={row.id}>
-                          <td>{row.isNew ? <input className="price-field" aria-label="模型 ID"
-                            placeholder="模型 ID" value={row.model} list={listId} spellCheck={false} disabled={saving}
-                            ref={(node) => { if (node && focusRow.current === row.id && !row.model) { node.focus(); focusRow.current = null } }}
-                            onChange={(event) => edit(row.id, (item) => ({ ...item, model: event.target.value }))} />
-                            : <span className="wrap-anywhere">{row.model}</span>}</td>
+                          <td>
+                            <div className="price-model-line">
+                              {row.isNew ? (
+                                <input className="price-field price-model-input" aria-label="模型 ID"
+                                  placeholder="模型 ID" value={row.model} list={listId} spellCheck={false} disabled={saving}
+                                  ref={(node) => { if (node && focusRow.current === row.id && !row.model) { node.focus(); focusRow.current = null } }}
+                                  onChange={(event) => edit(row.id, (item) => ({ ...item, model: event.target.value }))} />
+                              ) : (
+                                <span className="price-model-name wrap-anywhere">{row.model}</span>
+                              )}
+                              {peaks.length ? (
+                                <button type="button" role="switch" aria-checked={enabled}
+                                  className="price-peak-pill" disabled={saving}
+                                  onPointerEnter={(event) => showRowPeakTip(row, event.currentTarget)}
+                                  onPointerLeave={() => setPeakTip(null)}
+                                  onFocus={(event) => showRowPeakTip(row, event.currentTarget)}
+                                  onBlur={() => setPeakTip(null)}
+                                  onClick={(event) => togglePeak(row, event.currentTarget)}>
+                                  <Clock size={11} aria-hidden="true" />峰谷
+                                </button>
+                              ) : null}
+                            </div>
+                          </td>
                           {priceFields.map(([key, label], index) => (
                             <td key={key}><input className="price-field" aria-label={`${model} ${label}单价`}
                               placeholder={index < 2 ? '—' : '可选'} inputMode="decimal" disabled={saving} value={row.rates[key] ?? ''}
@@ -584,6 +758,7 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
                     setPickerRowId(null)
                     setPresetQuery('')
                     setPresetTip(null)
+                    setPeakTip(null)
                   }
                 }}>
                 <div className="preset-picker-search-wrap">
@@ -600,8 +775,8 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
                   )}
                 </div>
                 <div className="preset-picker-list" role="listbox" aria-label="预设价格列表"
-                  onScroll={() => setPresetTip(null)}
-                  onPointerLeave={() => setPresetTip(null)}>
+                  onScroll={() => { setPresetTip(null); setPeakTip(null) }}
+                  onPointerLeave={() => { setPresetTip(null); setPeakTip(null) }}>
                   {filteredPresets.length === 0 ? (
                     <p className="preset-picker-empty">未找到匹配的模型预设</p>
                   ) : filteredPresets.map((preset, index) => {
@@ -611,12 +786,15 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
                       ...(preset.cacheReadCostPerMillionTokens === undefined ? [] : [`读 ${formatPresetRate(preset.cacheReadCostPerMillionTokens)}`]),
                       ...(preset.cacheWriteCostPerMillionTokens === undefined ? [] : [`创 ${formatPresetRate(preset.cacheWriteCostPerMillionTokens)}`])
                     ].join(' · ')
+                    const peak = presetPeakText(preset, localTimeZone())
                     return (
                       <button key={preset.id} type="button" role="option" aria-selected={index === activePreset}
                         tabIndex={-1} ref={index === activePreset ? activePresetOption : undefined}
                         className="preset-picker-option" data-active={index === activePreset}
                         onPointerEnter={(event) => {
                           setActivePreset(index)
+                          setPeakTip(null)
+                          if ((event.target as HTMLElement | null)?.closest?.('.preset-peak-mark')) return
                           const strong = event.currentTarget.querySelector<HTMLElement>('.preset-option-main strong')
                           if (!strong || strong.scrollWidth <= strong.clientWidth) {
                             setPresetTip(null)
@@ -624,6 +802,7 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
                           }
                           setPresetTip({
                             text: preset.modelId,
+                            kind: 'name',
                             rect: event.currentTarget.getBoundingClientRect(),
                             below: false
                           })
@@ -633,7 +812,25 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
                         <span className="preset-option-main">
                           <strong>{preset.modelId}</strong>
                         </span>
-                        <span className="preset-option-rates">{rateSummary}</span>
+                        <span className="preset-option-rates">
+                          {peak && (
+                            <span className="preset-peak-mark"
+                              onPointerEnter={(event) => {
+                                event.stopPropagation()
+                                setActivePreset(index)
+                                setPresetTip({
+                                  text: peak,
+                                  kind: 'peak',
+                                  rect: event.currentTarget.getBoundingClientRect(),
+                                  below: false
+                                })
+                              }}
+                              onPointerLeave={() => setPresetTip(null)}>
+                              <Clock size={12} aria-hidden="true" />
+                            </span>
+                          )}
+                          <span>{rateSummary}</span>
+                        </span>
                       </button>
                     )
                   })}
@@ -641,6 +838,7 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
                 {presetTip && (
                   <span ref={presetTipRef} className="preset-picker-tip" role="tooltip"
                     data-placement={presetTip.below ? 'below' : 'above'}
+                    data-kind={presetTip.kind}
                     style={{
                       left: presetTip.left ?? Math.max(8, presetTip.rect.left),
                       top: presetTip.top ?? Math.max(8, presetTip.rect.top),
@@ -650,6 +848,23 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
                   </span>
                 )}
               </div>
+              {peakTip && (
+                <span ref={peakTipRef} className="price-peak-tip" role="tooltip"
+                  data-placement={peakTip.below ? 'below' : 'above'}
+                  style={{
+                    left: peakTip.left ?? Math.max(8, peakTip.rect.left),
+                    top: peakTip.top ?? Math.max(8, peakTip.rect.top),
+                    visibility: peakTip.left === undefined ? 'hidden' : 'visible'
+                  }}>
+                  {peakTip.entries.map((entry, index) => (
+                    <span className="price-peak-tip-entry" key={index}>
+                      <span className="price-peak-tip-schedule">{entry.schedule} ×{entry.factor}</span>
+                      {entry.prices && <span className="price-peak-tip-prices">{entry.prices}</span>}
+                    </span>
+                  ))}
+                  {!peakTip.enabled && <span className="price-peak-tip-off">已关闭</span>}
+                </span>
+              )}
               <datalist id={listId}>
                 {[...new Set([...models, ...rows.filter((row) => !row.isNew).map((row) => row.model)])].sort()
                   .map((name) => <option key={name} value={name} />)}

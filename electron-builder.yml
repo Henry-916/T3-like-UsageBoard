@@ -15,8 +15,8 @@ files:
   - resources/tray-icon.ico
   - resources/tray-icon.png
 extraResources:
-  - from: resources/fallback-rates.json
-    to: fallback-rates.json
+  - from: resources/models-dev-snapshot.json
+    to: models-dev-snapshot.json
 win:
   icon: resources/tray-icon.ico
   # Unsigned local builds have no publisher identity; signed distribution should

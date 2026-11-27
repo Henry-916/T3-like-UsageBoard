@@ -105,10 +105,13 @@ if (!app.requestSingleInstanceLock()) {
   app.on('before-quit', () => { quitting = true })
   app.on('will-quit', () => tray?.destroy())
   void app.whenReady().then(async () => {
-    const fallbackRates = join(app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'resources'), 'fallback-rates.json')
+    const bundledSnapshot = join(
+      app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'resources'),
+      'models-dev-snapshot.json'
+    )
     const trayPanel = createTrayPanel({ iconPath: trayIconPath, showMain: showPanel,
       rendererUrl: !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined })
-    const usage = createUsageClient(userData, fallbackRates)
+    const usage = createUsageClient(userData, bundledSnapshot)
     const encrypt = async (text: string) => {
       if (!await safeStorage.isAsyncEncryptionAvailable()) throw new Error('Credential encryption is unavailable')
       return safeStorage.encryptStringAsync(text)

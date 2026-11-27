@@ -26,7 +26,7 @@ describe('usage chart columns', () => {
     }
     const priced = { ...pricing, rates: new Map([['test', {
       standard: { input: 0.000123, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0 },
-      fast: null, ultrafast: null, tiers: []
+      fast: null, ultrafast: null, tiers: [], multipliers: []
     }]]) }
     const buckets = aggregateUsage([
       record('2026-11-01T03:30:14.999Z'),
@@ -119,7 +119,7 @@ describe('usage chart axes', () => {
     const query = { sinceDay: '2026-11-18', untilDay: '2026-11-24', timeZone: 'UTC' }
     const priced = { ...pricing, rates: new Map([['test', {
       standard: { input: 0, output: 85 / 620_000_000, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0 },
-      fast: null, ultrafast: null, tiers: []
+      fast: null, ultrafast: null, tiers: [], multipliers: []
     }]]) }
     const buckets = aggregateUsage([
       record('2026-11-18T12:00:00Z', { reportedCostUsd: 85, totals: { ...EMPTY_TOTALS, outputTokens: 620_000_000 } })

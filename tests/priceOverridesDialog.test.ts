@@ -1,7 +1,7 @@
 import { isValidElement, type ReactElement, type ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { filterPricePresets, applyPresetToRow, PriceOverridesDialog } from '../src/renderer/components/PriceOverridesDialog'
-import type { PricePreset } from '../src/shared/types'
+import type { PricePreset, PricingSettings } from '../src/shared/types'
 
 // No DOM environment is installed; run the component's callbacks and commit
 // the option ref before layout effects, as the renderer would.
@@ -59,6 +59,7 @@ type TestProps = {
   'aria-label'?: string
   'aria-hidden'?: boolean
   'aria-selected'?: boolean
+  'aria-checked'?: boolean
   size?: number
   'data-placement'?: string
   disabled?: boolean
@@ -68,6 +69,8 @@ type TestProps = {
   ref?: { current: unknown }
   onChange?: (event: { target: { value: string } }) => void
   onClick?: (event: { currentTarget: HTMLButtonElement }) => void
+  onFocus?: (event: { currentTarget: HTMLButtonElement }) => void
+  onBlur?: () => void
   onPointerDown?: (event: { preventDefault: () => void }) => void
   onKeyDown?: (event: { key: string; preventDefault: () => void }) => void
   onScroll?: () => void
@@ -100,9 +103,9 @@ const presets: PricePreset[] = Array.from({ length: 10 }, (_, index) => ({
   inputCostPerMillionTokens: 3, outputCostPerMillionTokens: 4
 }))
 
-function mockApi(presetResult: Promise<PricePreset[]>) {
+function mockApi(presetResult: Promise<PricePreset[]>, settingsValue: PricingSettings = settings) {
   vi.stubGlobal('window', {
-    usageApi: { getPricingSettings: () => Promise.resolve(settings), getPricePresets: () => presetResult }
+    usageApi: { getPricingSettings: () => Promise.resolve(settingsValue), getPricePresets: () => presetResult }
   })
 }
 
@@ -136,6 +139,10 @@ describe('PriceOverridesDialog preset picker', () => {
     )).toEqual(['模型 ID', '输入', '输出', '缓存读取', '缓存创建', '预设', '移除模型'])
     expect(nodes.filter(({ type }) => type === 'td').map(({ props }) => {
       const child = elements(props.children)[0]?.props
+      if (child?.className === 'price-model-line') {
+        const inner = elements(child.children)[0]?.props
+        return inner?.['aria-label'] ?? inner?.children
+      }
       return child?.['aria-label'] ?? (child?.className === 'price-preset-trigger' ? 'preset' : child?.children)
     })).toEqual(['custom', 'custom 输入单价', 'custom 输出单价', 'custom 缓存读取单价',
       'custom 缓存创建单价', 'preset', '移除 custom'])
@@ -153,6 +160,24 @@ describe('PriceOverridesDialog preset picker', () => {
       }
     })
     expect(applyPresetToRow({ id: 2, model: 'private/relay', rates: {} }, preset).model).toBe('private/relay')
+  })
+
+  it('carries peak multipliers from a preset and clears them when a fixed preset is chosen', () => {
+    const multipliers = [{
+      when: { utc_hours: { gte: '14:00' } },
+      factor: 0.5
+    }]
+    const row = applyPresetToRow({ id: 3, model: 'custom/deepseek', rates: {} }, {
+      ...presets[0]!, multipliers
+    })
+    expect(row).toMatchObject({ multipliers, multipliersEnabled: true })
+    expect(applyPresetToRow(row, presets[1]!)).toEqual({
+      id: 3, model: 'custom/deepseek',
+      rates: {
+        inputCostPerMillionTokens: '3', outputCostPerMillionTokens: '4',
+        cacheReadCostPerMillionTokens: '', cacheWriteCostPerMillionTokens: ''
+      }
+    })
   })
 
   it('renders each preset option as a single provider/model line', async () => {
@@ -510,6 +535,81 @@ describe('PriceOverridesDialog preset picker', () => {
     expect(filterPricePresets(mixed, 'code').map(({ modelId }) => modelId)).toEqual([
       'moonshotai/kimi-k2.7-code', 'opencode/kimi-k3'
     ])
+  })
+
+  it('shows a Clock marker left of the rates for a peak preset and a switch pill on the row', async () => {
+    const multipliers = [{ when: { utc_hours: { gte: '14:00' } }, factor: 0.5 }]
+    const peakPreset = { ...presets[0]!, modelId: 'deepseek/deepseek-flash', multipliers }
+    mockApi(Promise.resolve([peakPreset]), {
+      priceOverrides: {
+        'custom/deepseek': {
+          inputCostPerMillionTokens: 1, outputCostPerMillionTokens: 2,
+          multipliers, multipliersEnabled: false
+        }
+      }
+    })
+    render()
+    await Promise.resolve()
+    Object.assign(window, {
+      innerWidth: 800, innerHeight: 600,
+      addEventListener: vi.fn(), removeEventListener: vi.fn()
+    })
+    let nodes = render()
+    const rowSwitch = nodes.find(({ props }) => props.role === 'switch')
+    expect(rowSwitch?.props.className).toBe('price-peak-pill')
+    expect(rowSwitch?.props['aria-checked']).toBe(false)
+    expect(elements(rowSwitch!.props.children)[0]!.props.size).toBe(11)
+    const line = nodes.find(({ props }) => props.className === 'price-model-line')!
+    expect(elements(line.props.children)[0]!.props.children).toBe('custom/deepseek')
+
+    // Toggling back on is a real change the form will save.
+    rowSwitch!.props.onClick!({
+      currentTarget: { getBoundingClientRect: () => ({ left: 10, top: 10, bottom: 30 }) }
+    } as unknown as { currentTarget: HTMLButtonElement })
+    nodes = render()
+    expect(nodes.find(({ props }) => props.role === 'switch')?.props['aria-checked']).toBe(true)
+    expect(nodes.find(({ type, props }) => type === 'button' && props.className?.includes('primary-action'))?.props.disabled).toBe(false)
+
+    openPicker(nodes)
+    nodes = render()
+    nodes.find(({ props }) => props.className?.split(' ').includes('preset-picker-search'))!
+      .props.onChange!({ target: { value: '' } })
+    nodes = render()
+    const option = nodes.find(({ props }) => props.role === 'option')!
+    const rates = elements(option.props.children).find(({ props }) => props.className === 'preset-option-rates')!
+    const parts = elements(rates.props.children)
+    expect(parts[0]!.props.className).toBe('preset-peak-mark')
+    expect(elements(parts[0]!.props.children)[0]!.props.size).toBe(12)
+    expect(parts.some(({ props }) =>
+      typeof props.children === 'string' && props.children.includes('入 $3'))).toBe(true)
+  })
+
+  it('does not mark service-tier or date presets as peak or show a row switch', async () => {
+    const multipliers = [
+      { when: { service_tier: { equals: 'priority' } }, factor: 2 },
+      { when: { date: { gte: '2026-01-01' } }, factor: 1.1 }
+    ]
+    mockApi(Promise.resolve([{
+      ...presets[0]!, modelId: 'openai/gpt-6.2-sol', multipliers
+    }]), {
+      priceOverrides: {
+        'openai/gpt-6.2-sol': {
+          inputCostPerMillionTokens: 1, outputCostPerMillionTokens: 2,
+          multipliers, multipliersEnabled: true
+        }
+      }
+    })
+    render()
+    await Promise.resolve()
+    let nodes = render()
+    expect(nodes.some(({ props }) => props.role === 'switch')).toBe(false)
+    openPicker(nodes)
+    nodes = render()
+    nodes.find(({ props }) => props.className?.split(' ').includes('preset-picker-search'))!
+      .props.onChange!({ target: { value: '' } })
+    nodes = render()
+    expect(nodes.some(({ props }) => props.role === 'option')).toBe(true)
+    expect(nodes.some(({ props }) => props.className === 'preset-peak-mark')).toBe(false)
   })
 
   it('shows the full model id only for a truncated option and clears it again', async () => {

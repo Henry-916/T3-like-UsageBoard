@@ -96,6 +96,40 @@ export interface UsagePricing {
 }
 
 const day = z.iso.date()
+export const utcDaySchema = z.enum(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'])
+export type UtcDay = z.infer<typeof utcDaySchema>
+export interface RateCondition {
+  utc_days?: { in: UtcDay[] }
+  utc_hours?: { gte?: string; lt?: string }
+  date?: { gte?: string; lt?: string; in?: string[] }
+  service_tier?: { equals?: string; in?: string[] }
+  all?: RateCondition[]
+  any?: RateCondition[]
+  not?: RateCondition
+}
+const clock = z.string().trim().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$/)
+export const rateConditionSchema: z.ZodType<RateCondition> = z.lazy(() => z.object({
+  utc_days: z.object({ in: z.array(utcDaySchema) }).optional(),
+  utc_hours: z.object({ gte: clock.optional(), lt: clock.optional() }).optional(),
+  date: z.object({
+    gte: z.string().trim().min(1).optional(),
+    lt: z.string().trim().min(1).optional(),
+    in: z.array(z.string().trim().min(1)).optional()
+  }).optional(),
+  service_tier: z.object({
+    equals: z.string().trim().min(1).optional(),
+    in: z.array(z.string().trim().min(1)).optional()
+  }).optional(),
+  all: z.array(rateConditionSchema).optional(),
+  any: z.array(rateConditionSchema).optional(),
+  not: rateConditionSchema.optional()
+}))
+export const rateMultiplierSchema = z.object({
+  when: rateConditionSchema,
+  factor: z.number().refine((value) => Number.isFinite(value) && value > 0, 'Expected a positive factor')
+})
+export type RateMultiplier = z.infer<typeof rateMultiplierSchema>
+
 export const usageSummaryInputSchema = z.object({
   sinceDay: day,
   untilDay: day,
@@ -130,6 +164,27 @@ export interface UsageSummary {
   sources: UsageSource[]
   pricing: UsagePricing
   scanDurationMs: number
+  modelPrices: Record<string, UsageModelPrice>
+}
+
+export interface UsageModelPriceTier {
+  threshold: number
+  inputCostPerMillionTokens: number
+  outputCostPerMillionTokens: number
+  cacheReadCostPerMillionTokens?: number
+  cacheWriteCostPerMillionTokens?: number
+}
+export interface UsageModelPrice {
+  inputCostPerMillionTokens: number
+  outputCostPerMillionTokens: number
+  cacheReadCostPerMillionTokens?: number
+  cacheWriteCostPerMillionTokens?: number
+  custom?: boolean
+  tiers?: UsageModelPriceTier[]
+  multipliers?: RateMultiplier[]
+}
+export function modelPriceKey(provider: UsageProviderKind, model: string): string {
+  return `${provider}:${model}`
 }
 
 const price = z.number().nonnegative()
@@ -137,7 +192,9 @@ export const priceOverridesSchema = z.record(text, z.object({
   inputCostPerMillionTokens: price,
   outputCostPerMillionTokens: price,
   cacheReadCostPerMillionTokens: price.optional(),
-  cacheWriteCostPerMillionTokens: price.optional()
+  cacheWriteCostPerMillionTokens: price.optional(),
+  multipliers: z.array(rateMultiplierSchema).optional(),
+  multipliersEnabled: z.boolean().optional()
 }))
 export type PriceOverrides = Readonly<z.infer<typeof priceOverridesSchema>>
 export const pricingSettingsSchema = z.object({
@@ -163,6 +220,7 @@ export interface PricePreset {
   outputCostPerMillionTokens: number
   cacheReadCostPerMillionTokens?: number
   cacheWriteCostPerMillionTokens?: number
+  multipliers?: RateMultiplier[]
 }
 export const uiPreferencesSchema = z.object({
   tab: z.enum(['cost', 'tokens', 'limits']).optional(),

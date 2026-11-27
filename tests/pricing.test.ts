@@ -1,48 +1,88 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createOverrideRateTable, loadPricing, lookupRate, parseRateTable, priceUsage } from "../src/main/usage/pricing";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildModelsDevSnapshot, loadModelsDevSnapshot, parseModelsDevSnapshot, resetModelsDevState, waitForModelsDevRefresh } from "../src/main/usage/modelsDev";
+import { buildRateTable, createOverrideRateTable, describeRecordRate, loadPricing, lookupRate, priceUsage } from "../src/main/usage/pricing";
+import { describeMultiplierRules } from "../src/shared/pricingMultipliers";
 import { EMPTY_TOTALS } from "../src/shared/types";
 
+const cost = (input: number, output: number, extra?: Record<string, unknown>) => ({
+  text: {
+    input: { price: input, ...(extra ?? {}) },
+    output: { price: output },
+  },
+});
+
 const document = {
-  "anthropic/claude-test": {
-    input_cost_per_token: 2e-6, output_cost_per_token: 10e-6,
-    cache_read_input_token_cost: 0.5e-6, cache_creation_input_token_cost: 3e-6,
-    cache_creation_input_token_cost_above_1hr: 4e-6,
-    input_cost_per_token_above_1k_tokens: 4e-6, output_cost_per_token_above_1k_tokens: 20e-6,
-    provider_specific_entry: { fast: 2 },
+  anthropic: {
+    models: {
+      "claude-test": {
+        id: "claude-test-20260101",
+        canonical_id: "anthropic/claude-test",
+        cost: {
+          text: {
+            input: {
+              price: 2,
+              cache: { read: 0.5, write: { "5m": 3, "1h": 4 } },
+              overrides: [{
+                when: { context: { gt: 1000 } },
+                price: 4,
+                cache: { read: 1, write: { "5m": 6, "1h": 8 } },
+              }],
+            },
+            output: { price: 10, overrides: [{ when: { context: { gt: 1000 } }, price: 20 }] },
+          },
+          multipliers: [{ when: { service_tier: { equals: "fast" } }, factor: 2 }],
+        },
+      },
+      "claude-opus-5-5": { canonical_id: "anthropic/claude-opus-5-5", cost: cost(1, 2) },
+    },
   },
-  "reseller/claude-test": { input_cost_per_token: 9, output_cost_per_token: 9 },
-  "opencode/model-free": {
-    input_cost_per_token: 0, output_cost_per_token: 0,
-    cache_read_input_token_cost: 0, cache_creation_input_token_cost: 0,
+  openai: { models: { "gpt-5": { canonical_id: "openai/gpt-5", cost: cost(1, 2) } } },
+  reseller: { models: { "claude-test": { canonical_id: "anthropic/claude-test", cost: cost(9, 9) } } },
+  opencode: {
+    models: {
+      "model-free": {
+        canonical_id: "opencode/model-free",
+        cost: { text: { input: { price: 0 }, output: { price: 0 } } },
+      },
+    },
   },
-  incomplete: { input_cost_per_token: 1 },
+  "alibaba-cn": {
+    models: {
+      qwen: { canonical_id: "alibaba/qwen", cost: cost(1, 1) },
+      "deepseek-v4.1-flash-1017": { canonical_id: "deepseek/deepseek-v4.1-flash-1017", cost: cost(0.28, 1.13) },
+    },
+  },
 };
-const table = parseRateTable(document);
-const record = {
-  model: "claude-test",
+
+const snapshot = buildModelsDevSnapshot(document, { source: "test", fetchedAt: new Date().toISOString() })!;
+const table = buildRateTable(snapshot);
+const record = (model: string, extra: Record<string, unknown> = {}) => ({
+  model,
   speed: "standard" as const,
   reportedCostUsd: null,
   cacheCreation1hTokens: 4,
+  timestampMs: Date.parse("2026-11-24T00:00:00Z"),
   totals: { ...EMPTY_TOTALS, uncachedInputTokens: 10, cachedInputTokens: 20, cacheCreationTokens: 10, outputTokens: 5, reasoningTokens: 5 },
-};
+  ...extra,
+});
 
 describe("priceUsage", () => {
   it("prefers first-party aliases and separates cache TTLs without double-billing reasoning", () => {
-    expect(lookupRate(table, "incomplete")).toBeUndefined();
-    const priced = priceUsage(table, { ...record, model: " CLAUDE-TEST[1m]" });
+    const priced = priceUsage(table, record(" CLAUDE-TEST[1m]"));
     expect(priced.costSource).toBe("modelPriced");
     expect(priced.categoryCostUsd?.cacheWrite).toBeCloseTo(34e-6, 12);
     expect(priced.costUsd).toBeCloseTo(114e-6, 12);
     expect(priced.cacheSavingsUsd).toBeCloseTo(30e-6, 12);
   });
 
-  it("handles context tiers and fast rates", () => {
-    const priced = priceUsage(table, {
-      ...record, speed: "fast", totals: { ...record.totals, uncachedInputTokens: 1000 },
-    });
+  it("handles context tiers and fast service-tier multipliers", () => {
+    const priced = priceUsage(table, record("claude-test", {
+      speed: "fast",
+      totals: { ...record("claude-test").totals, uncachedInputTokens: 1000 },
+    }));
     expect(priced.categoryCostUsd?.input).toBeCloseTo(0.008, 12);
     expect(priced.speedPremiumUsd).toBeCloseTo(priced.costUsd / 2, 12);
   });
@@ -51,62 +91,67 @@ describe("priceUsage", () => {
     const overrides = createOverrideRateTable({
       "claude-test": { inputCostPerMillionTokens: 4, outputCostPerMillionTokens: 1, cacheReadCostPerMillionTokens: 0 },
     });
-    expect(priceUsage(table, record, overrides).costUsd).toBeCloseTo(85e-6, 12);
+    expect(priceUsage(table, record("claude-test"), overrides).costUsd).toBeCloseTo(85e-6, 12);
     for (const reportedCostUsd of [0, 0.5]) {
-      const repriced = priceUsage(table, { ...record, reportedCostUsd }, overrides);
+      const repriced = priceUsage(table, record("claude-test", { reportedCostUsd }), overrides);
       expect(repriced.costSource).toBe("modelPriced");
       expect(repriced.costUsd).toBeCloseTo(85e-6, 12);
       expect(repriced.categoryCostUsd?.cacheRead).toBe(0);
     }
-    expect(priceUsage(table, { ...record, model: "unknown", reportedCostUsd: 0 }, overrides))
+    expect(priceUsage(table, record("unknown", { reportedCostUsd: 0 }), overrides))
       .toMatchObject({ costUsd: 0, costSource: "providerReported",
         categoryCostUsd: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
-    expect(priceUsage(table, { ...record, model: "unknown", reportedCostUsd: 0.75 }, overrides)).toEqual({
+    expect(priceUsage(table, record("unknown", { reportedCostUsd: 0.75 }), overrides)).toEqual({
       costUsd: 0, costSource: "unpriced", categoryCostUsd: null, speedPremiumUsd: 0, cacheSavingsUsd: 0,
     });
-    expect(priceUsage(table, { ...record, model: "unknown" }, overrides)).toMatchObject({ costSource: "unpriced" });
     // A zero-priced rate cannot split a positive lump-sum report; do not trust it.
-    expect(priceUsage(table, { ...record, model: "opencode/model-free", reportedCostUsd: 2 }, overrides)).toMatchObject({
+    expect(priceUsage(table, record("opencode/model-free", { reportedCostUsd: 2 }), overrides)).toMatchObject({
       costUsd: 0, costSource: "modelPriced",
       categoryCostUsd: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     });
   });
 
-  it("prioritizes exact local pricing over gateway rates and scales reported totals only for non-explicit rates", () => {
-    const model = "ALIBABA-CN/qwen";
-    const rates = (input: number) => createOverrideRateTable({
-      [model]: { inputCostPerMillionTokens: input, outputCostPerMillionTokens: input },
-    });
-    const gateway = parseRateTable({ "dashscope/qwen": { input_cost_per_token: 1e-6, output_cost_per_token: 1e-6 } });
-    const ctx = { opencodeCatalogRates: rates(2), opencodeUserRates: rates(3), overrides: rates(4) };
-    const usage = { ...record, model };
-    expect(priceUsage(gateway, usage).costUsd).toBeCloseTo(45e-6, 12);
-    expect(priceUsage(gateway, usage, { opencodeCatalogRates: ctx.opencodeCatalogRates }).costUsd).toBeCloseTo(90e-6, 12);
-    const historical = { ...usage, reportedCostUsd: 0.5 };
-    const catalog = priceUsage(gateway, historical, { opencodeCatalogRates: ctx.opencodeCatalogRates });
-    expect(catalog).toMatchObject({ costUsd: 0.5, costSource: "providerReported" });
-    expect(catalog.categoryCostUsd?.input).toBeCloseTo(0.5 * 10 / 45, 12);
-    const user = priceUsage(gateway, historical, { ...ctx, overrides: undefined });
-    expect(user.costSource).toBe("modelPriced");
-    expect(user.costUsd).toBeCloseTo(135e-6, 12);
-    const overridden = priceUsage(gateway, historical, ctx);
-    expect(overridden.costSource).toBe("modelPriced");
-    expect(overridden.costUsd).toBeCloseTo(180e-6, 12);
+  it("only forwards whitelisted gateway synonyms and never strips a private prefix", () => {
+    for (const model of ["openai-codex/gpt-5", "openai-chatgpt/gpt-5"]) {
+      expect(priceUsage(table, record(model)).costSource).toBe("modelPriced");
+    }
+    expect(priceUsage(table, record("claude-code/claude-opus-5-5")).costSource).toBe("modelPriced");
+    expect(priceUsage(table, record("dashscope/qwen")).costSource).toBe("modelPriced");
+    for (const model of ["custom/gpt-5", "cpa/gpt-5", "opencsg/gpt-5"]) {
+      expect(priceUsage(table, record(model, { reportedCostUsd: 0.5 }))).toEqual({
+        costUsd: 0, costSource: "unpriced", categoryCostUsd: null, speedPremiumUsd: 0, cacheSavingsUsd: 0,
+      });
+    }
+    expect(lookupRate(table, "gpt-5")).toBeDefined();
+    expect(lookupRate(table, "reseller/claude-test")).toBeDefined();
   });
 
-  it("does not leak bare, inferred, or explicitly hinted rates into other channels", () => {
-    const fee = { input_cost_per_token: 1e-6, output_cost_per_token: 1e-6 };
-    const gateway = parseRateTable({
-      "gpt-5.6-sol": fee, "cpa/gpt-5.6-sol": fee, "reseller/third-party": fee,
-      "openrouter/google/gemini-test": fee, "openai/synthetic": fee, "anthropic.opus": fee,
-    });
-    for (const model of ["cpa/gpt-5.6-sol", "openai/third-party", "openai/reseller/third-party", "openai/synthetic", "anthropic/opus"]) {
-      expect(priceUsage(gateway, { ...record, model, rateModel: "gpt-5.6-sol", reportedCostUsd: 0.5 }))
-        .toEqual({ costUsd: 0, costSource: "unpriced", categoryCostUsd: null, speedPremiumUsd: 0, cacheSavingsUsd: 0 });
-    }
-    for (const model of ["openai/gpt-5.6-sol", "openrouter/google/gemini-test"]) {
-      expect(priceUsage(gateway, { ...record, model }).costUsd).toBeCloseTo(45e-6, 12);
-    }
+  it("falls back from snapshot-date suffixes to the same channel's base model", () => {
+    const priced = priceUsage(table, record("anthropic/claude-opus-5-5-20261001"));
+    expect(priced.costSource).toBe("modelPriced");
+    expect(priced.costUsd).toBeCloseTo(50e-6, 12);
+    expect(priceUsage(table, record("anthropic/claude-opus-5-5-2026-10-01")).costSource).toBe("modelPriced");
+    expect(priceUsage(table, record("custom/claude-opus-5-5-20261001")).costSource).toBe("unpriced");
+  });
+
+  it("folds an already-effective date-only change into the displayed unit price", () => {
+    const dated = buildRateTable(buildModelsDevSnapshot({
+      openai: {
+        models: {
+          "gpt-dated": {
+            cost: {
+              text: { input: { price: 1 }, output: { price: 2 } },
+              multipliers: [{ when: { date: { gte: "2020-01-01" } }, factor: 1.5 }],
+            },
+          },
+        },
+      },
+    }, { source: "test", fetchedAt: new Date().toISOString() })!);
+    const described = describeRecordRate(dated, record("gpt-dated"));
+    expect(described?.inputCostPerMillionTokens).toBeCloseTo(1.5, 10);
+    expect(described?.outputCostPerMillionTokens).toBeCloseTo(3, 10);
+    // The peak describer ignores date-only rules because they are already baked in.
+    expect(describeMultiplierRules(described?.multipliers, "UTC")).toBeNull();
   });
 });
 
@@ -116,56 +161,113 @@ async function directory(): Promise<string> {
   dirs.push(dir);
   return dir;
 }
+beforeEach(() => resetModelsDevState());
 afterEach(async () => {
   vi.unstubAllGlobals();
-  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  await Promise.all(dirs.map((dir) => waitForModelsDevRefresh(dir).catch(() => undefined)));
+  resetModelsDevState();
+  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true }).catch(() => undefined)));
+});
+
+const cacheSnapshot = (fetchedAt: string) => ({ ...snapshot, fetchedAt });
+
+describe("bundled snapshot", () => {
+  it("ships priced first-party models with their peak schedules", async () => {
+    const parsed = parseModelsDevSnapshot(JSON.parse(
+      await readFile(resolve("resources/models-dev-snapshot.json"), "utf8"),
+    ));
+    expect(parsed?.version).toBe(6);
+    const bundled = buildRateTable(parsed!);
+    const deepseek = lookupRate(bundled, "deepseek/deepseek-v4.1-flash-1017");
+    expect(deepseek?.standard.input).toBeGreaterThan(0);
+    expect(deepseek?.multipliers.length).toBeGreaterThan(0);
+    expect(lookupRate(bundled, "alibaba-cn/deepseek-v4.1-flash-1017")).toBeDefined();
+    expect(lookupRate(bundled, "gpt-5")).toBeDefined();
+  });
 });
 
 describe("loadPricing", () => {
-  it("uses a valid recent disk cache without fetching", async () => {
+  it("uses a fresh local snapshot without fetching", async () => {
     const dir = await directory();
     const fetchedAt = new Date().toISOString();
-    await writeFile(join(dir, "litellm-rates-cache.json"), JSON.stringify({ fetchedAt, rates: document }));
+    await writeFile(join(dir, "models-dev-cache.json"), JSON.stringify(cacheSnapshot(fetchedAt)));
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    expect((await loadPricing(dir, join(dir, "missing.json"))).status).toMatchObject({ status: "cached", fetchedAt });
+    const pricing = await loadPricing(dir, join(dir, "missing.json"));
+    expect(pricing.status).toMatchObject({ status: "cached", fetchedAt });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("loads the pinned bundled snapshot without waiting on the network", async () => {
+  it("returns the bundled snapshot instantly and refreshes in the background", async () => {
     const dir = await directory();
-    const fetchMock = vi.fn(async (_url: string, { signal }: { signal: AbortSignal }) => {
-      expect(signal.aborted).toBe(false);
-      return new Promise<Response>(() => {});
-    });
+    const bundled = join(dir, "models-dev-snapshot.json");
+    await writeFile(bundled, JSON.stringify(cacheSnapshot(new Date(Date.now() - 25 * 3_600_000).toISOString())));
+    const fetchMock = vi.fn(async () => Response.json(document, { headers: { etag: '"v1"' } }));
     vi.stubGlobal("fetch", fetchMock);
-    const pricing = await loadPricing(dir, resolve("resources/fallback-rates.json"));
-    expect(pricing.status).toMatchObject({ status: "cached", source: expect.stringMatching(/litellm\/[0-9a-f]{40}\//) });
-    expect(lookupRate(pricing.rates, "gemini-3.6-flash")).toBeDefined();
+    const pricing = await loadPricing(dir, bundled);
+    expect(pricing.status.status).toBe("cached");
+    expect(lookupRate(pricing.rates, "gpt-5")).toBeDefined();
+    await waitForModelsDevRefresh(dir);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    const cache = JSON.parse(await readFile(join(dir, "models-dev-cache.json"), "utf8"));
+    expect(cache).toMatchObject({ version: 6, etag: '"v1"', source: "https://models.dev/experimental/v2.0/api.json?type=all" });
   });
 
-  it("waits for a deduplicated fetch only when there is no usable local table and writes the 24h cache", async () => {
+  it("deduplicates concurrent refreshes and revalidates with ETag", async () => {
     const dir = await directory();
+    const bundled = join(dir, "models-dev-snapshot.json");
+    await writeFile(bundled, JSON.stringify(cacheSnapshot(new Date(Date.now() - 25 * 3_600_000).toISOString())));
     const fetchMock = vi.fn(async () => Response.json(document));
     vi.stubGlobal("fetch", fetchMock);
-    const [a, b] = await Promise.all([loadPricing(dir, join(dir, "missing")), loadPricing(dir, join(dir, "missing"))]);
-    expect(a.status.status).toBe("fresh");
-    expect(b.status.status).toBe("fresh");
+    await Promise.all([loadPricing(dir, bundled), loadPricing(dir, bundled)]);
+    await waitForModelsDevRefresh(dir);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const cache = JSON.parse(await readFile(join(dir, "litellm-rates-cache.json"), "utf8"));
-    expect(cache).toMatchObject({ source: a.status.source, fetchedAt: a.status.fetchedAt, rates: document });
+    expect((await loadModelsDevSnapshot({ userData: dir, bundledSnapshot: bundled }))?.version).toBe(6);
+  });
+
+  it("handles 304 Not Modified by refreshing fetchedAt without downloading", async () => {
+    const dir = await directory();
+    const stale = new Date(Date.now() - 25 * 3_600_000).toISOString();
+    await writeFile(join(dir, "models-dev-cache.json"), JSON.stringify({ ...cacheSnapshot(stale), etag: '"old"' }));
+    const fetchMock = vi.fn(async () => new Response(null, { status: 304, headers: { etag: '"old"' } }));
+    vi.stubGlobal("fetch", fetchMock);
+    await loadPricing(dir, join(dir, "missing"));
+    await waitForModelsDevRefresh(dir);
+    expect(fetchMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      headers: { "If-None-Match": '"old"' },
+    }));
+    const cache = JSON.parse(await readFile(join(dir, "models-dev-cache.json"), "utf8"));
+    expect(Date.parse(cache.fetchedAt)).toBeGreaterThan(Date.parse(stale));
+  });
+
+  it("falls back to the stable models.dev feed when the experimental path is gone", async () => {
+    const dir = await directory();
+    const bundled = join(dir, "models-dev-snapshot.json");
+    await writeFile(bundled, JSON.stringify(cacheSnapshot(new Date(Date.now() - 25 * 3_600_000).toISOString())));
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === "https://models.dev/experimental/v2.0/api.json?type=all") {
+        return new Response("not found", { status: 404 });
+      }
+      return Response.json(document);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await loadPricing(dir, bundled);
+    await waitForModelsDevRefresh(dir);
+    const cache = JSON.parse(await readFile(join(dir, "models-dev-cache.json"), "utf8"));
+    expect(cache.source).toBe("https://models.dev/api.json");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("uses a stale cache before the bundle on failure and is unavailable only with neither", async () => {
     const dir = await directory();
     const fetchedAt = new Date(Date.now() - 25 * 3_600_000).toISOString();
-    await writeFile(join(dir, "litellm-rates-cache.json"), JSON.stringify({ fetchedAt, rates: document }));
+    await writeFile(join(dir, "models-dev-cache.json"), JSON.stringify(cacheSnapshot(fetchedAt)));
     const fetchMock = vi.fn(async () => { throw new Error("offline"); });
     vi.stubGlobal("fetch", fetchMock);
-    expect((await loadPricing(dir, resolve("resources/fallback-rates.json"))).status).toMatchObject({ status: "cached", fetchedAt });
+    const stale = await loadPricing(dir, join(dir, "missing.json"));
+    expect(stale.status).toMatchObject({ status: "cached", fetchedAt });
+    await waitForModelsDevRefresh(dir);
     const empty = await directory();
     expect((await loadPricing(empty, join(empty, "missing"))).status.status).toBe("unavailable");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

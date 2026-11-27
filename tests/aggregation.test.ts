@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { aggregateUsage, createUsageWindowFilter } from "../src/main/usage/aggregation";
-import { parseRateTable, type PricingResult } from "../src/main/usage/pricing";
+import { buildModelsDevSnapshot } from "../src/main/usage/modelsDev";
+import { buildRateTable, type PricingResult } from "../src/main/usage/pricing";
+import { buildRateDocument } from "./helpers/rateDocument";
 import { EMPTY_TOTALS, type UsageRecord, type UsageSummaryInput } from "../src/shared/types";
 
 const daily: UsageSummaryInput = { sinceDay: "2026-11-01", untilDay: "2026-11-01", timeZone: "America/New_York" };
+const rateTable = (models: Parameters<typeof buildRateDocument>[0]) => buildRateTable(
+  buildModelsDevSnapshot(buildRateDocument(models), { source: "test", fetchedAt: new Date().toISOString() })!,
+);
 const pricing: PricingResult = {
-  rates: parseRateTable({
-    "target": { input_cost_per_token: 0.000002, output_cost_per_token: 0.00001, cache_read_input_token_cost: 0.000001 },
-    "original-rate": { input_cost_per_token: 1, output_cost_per_token: 1 },
+  rates: rateTable({
+    "target": { input: 2, output: 10, cacheRead: 1 },
+    "original-rate": { input: 1e6, output: 1e6 },
   }),
   status: { status: "cached", source: "test", fetchedAt: null, knownModels: 2 },
 };
@@ -25,9 +30,9 @@ describe("aggregateUsage", () => {
       record("CPA/qwen3.8-flash", openCode),
       record("alibaba-cn/qwen3.8-flash", openCode),
     ];
-    const rates = { ...pricing, rates: parseRateTable({
-      "qwen3.8-flash": { input_cost_per_token: 1, output_cost_per_token: 1 },
-      "dashscope/qwen3.8-flash": { input_cost_per_token: 1e-6, output_cost_per_token: 1e-6 },
+    const rates = { ...pricing, rates: rateTable({
+      "qwen3.8-flash": { input: 1e6, output: 1e6 },
+      "alibaba-cn/qwen3.8-flash": { input: 1, output: 1 },
     }) };
     expect(aggregateUsage(records, daily, rates, {})).toMatchObject([
       { model: "alibaba-cn/qwen3.8-flash", costUsd: 1, costSource: "providerReported" },
@@ -81,5 +86,27 @@ describe("aggregateUsage", () => {
       model: "unknown", records: 1, sessions: 1, unpricedTokens: 32, unpricedRecords: 1, costSource: "unpriced",
     });
     expect(rows[1]).toMatchObject({ provider: "claude", unpricedTokens: 25 });
+  });
+
+  it("exposes the effective rate, including peak multipliers, for the model dialog", () => {
+    const prices = new Map();
+    const rows = aggregateUsage([
+      record("target", { timestampMs: Date.parse("2026-11-01T05:30:00Z") }),
+    ], daily, pricing, {
+      target: {
+        inputCostPerMillionTokens: 2,
+        outputCostPerMillionTokens: 10,
+        cacheReadCostPerMillionTokens: 1,
+        multipliers: [{ when: { utc_hours: { gte: "05:00", lt: "06:00" } }, factor: 2 }],
+      },
+    }, undefined, prices);
+    expect(prices.get("antigravity:target")).toMatchObject({
+      inputCostPerMillionTokens: 2,
+      outputCostPerMillionTokens: 10,
+      cacheReadCostPerMillionTokens: 1,
+      custom: true,
+      multipliers: [{ factor: 2 }],
+    });
+    expect(rows[0]?.costUsd).toBeCloseTo(160e-6, 12);
   });
 });

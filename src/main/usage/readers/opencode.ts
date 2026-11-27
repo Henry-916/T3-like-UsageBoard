@@ -5,6 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import { qualifyModelId } from "../../../shared/modelNormalize";
 import { tokenCount, totalTokens, type UsageRecord } from "../../../shared/types";
 
+type Row = Record<string, unknown>;
+
 function object(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -71,7 +73,21 @@ export async function readOpenCodeJson(filePath: string): Promise<UsageRecord[]>
   return record === null ? [] : [record];
 }
 
+export type OpenCodeCursors = Record<string, number>
+
 export async function readOpenCodeDatabase(filePath: string, cutoffMs = -Infinity): Promise<UsageRecord[]> {
+  return (await readOpenCodeDatabaseIncremental(filePath, cutoffMs)).records
+}
+
+/**
+ * Read only rows appended after the previous cursors when the database was not
+ * rebuilt, so a busy conversation stops rescanning 92 days of history.
+ */
+export async function readOpenCodeDatabaseIncremental(
+  filePath: string,
+  cutoffMs = -Infinity,
+  previous?: OpenCodeCursors,
+): Promise<{ records: UsageRecord[]; cursors: OpenCodeCursors }> {
   const db = new DatabaseSync(filePath, { readOnly: true });
   try {
     db.exec("PRAGMA busy_timeout = 100; BEGIN");
@@ -81,6 +97,10 @@ export async function readOpenCodeDatabase(filePath: string, cutoffMs = -Infinit
     }
     const columnsOf = (table: "message" | "session_message" | "session_v2") =>
       new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((r) => r.name));
+    const maxRowId = (table: string): number => {
+      const row = db.prepare(`SELECT MAX(rowid) AS max FROM ${table}`).get() as Row | undefined;
+      return typeof row?.max === "number" ? row.max : 0;
+    };
     const forks = new Map<string, { parent: string; lastCopiedSeq: number; created: number }>();
     if (
       tables.has("session_v2") && tables.has("session_message") &&
@@ -122,6 +142,14 @@ export async function readOpenCodeDatabase(filePath: string, cutoffMs = -Infinit
       }
       return `${session}:${seq}`;
     };
+    // A rebuilt database, an empty cursor set, or fork lineage needs a full pass.
+    let incremental = previous !== undefined && Object.keys(previous).length > 0 && forks.size === 0;
+    if (incremental) {
+      for (const [table, rowId] of Object.entries(previous!)) {
+        if (!tables.has(table) || maxRowId(table) < rowId) { incremental = false; break; }
+      }
+    }
+    const cursors: OpenCodeCursors = {};
     const records: UsageRecord[] = [];
     const ids = new Set<string>();
     const originals = new Set<string>();
@@ -139,7 +167,10 @@ export async function readOpenCodeDatabase(filePath: string, cutoffMs = -Infinit
         WHERE rowid > ? ${versionFilter} ${timestampFilter}
         ORDER BY rowid LIMIT ?
       `);
-      let after = -Infinity;
+      let after = incremental ? previous?.[table] ?? -Infinity : -Infinity;
+      // Capture the high-water mark before scanning: rows appended mid-scan stay
+      // for the next incremental pass instead of being skipped forever.
+      const tableMax = maxRowId(table);
       while (true) {
         const page = list.all(after, ...(hasTimestamp ? [cutoffMs] : []), MESSAGE_PAGE_SIZE);
         if (page.length === 0) break;
@@ -177,8 +208,10 @@ export async function readOpenCodeDatabase(filePath: string, cutoffMs = -Infinit
         if (page.length < MESSAGE_PAGE_SIZE) break;
         after = Number(page[page.length - 1]!.row_id);
       }
+      // Advance past filtered rows too: new messages always append at the end.
+      cursors[table] = tableMax;
     }
-    return records;
+    return { records, cursors };
   } finally {
     db.close();
   }
