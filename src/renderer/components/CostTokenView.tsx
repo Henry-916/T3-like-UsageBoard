@@ -1,5 +1,4 @@
-import { Info } from 'lucide-react'
-import { useId, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import type { UsageProviderKind, UsageSummary, UsageSummaryInput } from '../../shared/types'
 import { formatPercent } from '../../shared/usageFormat'
 import {
@@ -44,10 +43,7 @@ export function CostTokenView({ summary, query, hiddenProviders, metric, pending
               {metric === 'cost' ? formatUsageCost(values) : formatMetric(values.tokens, metric)}
             </p>
             <div className="usage-caption usage-summary-caption">
-              <span>{formatCount(sessions)} 个会话{metric === 'cost' && ' · API 估算'}</span>
-              {metric === 'cost' && values.unpricedRecords > 0 && !values.costUnknown && (
-                <PricingNote share={values.unpricedRecords / values.records} />
-              )}
+              <span>{formatCount(sessions)} 个会话</span>
             </div>
           </div>
           {ranked.length > 0 && <ul className="provider-rank" aria-label="提供方用量">
@@ -84,21 +80,5 @@ export function CostTokenView({ summary, query, hiddenProviders, metric, pending
       </div>
       <BreakdownTable buckets={buckets} query={query} values={values} metric={metric} activeProviders={active} onModel={onModel} />
     </div>
-  )
-}
-
-function PricingNote({ share }: { share: number }) {
-  const id = useId()
-  const [dismissed, setDismissed] = useState(false)
-  return (
-    <span className="usage-pricing-note" data-dismissed={dismissed}
-      onPointerEnter={() => setDismissed(false)}>
-      <button type="button" aria-label="API 估算说明" aria-describedby={id}
-        onFocus={() => setDismissed(false)} onClick={() => setDismissed(false)}
-        onKeyDown={(event) => { if (event.key === 'Escape') setDismissed(true) }}>
-        <Info size={12} aria-hidden="true" />
-      </button>
-      <span id={id} role="tooltip" className="usage-pricing-tip">API 估算不含未定价记录（{formatPercent(share)}）</span>
-    </span>
   )
 }

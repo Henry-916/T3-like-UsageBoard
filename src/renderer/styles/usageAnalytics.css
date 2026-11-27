@@ -16,26 +16,8 @@
 }
 
 .usage-overview .usage-caption { line-height: 1.35; }
-.usage-summary-caption { display: flex; align-items: center; flex-wrap: wrap; gap: 0 5px; }
-.usage-pricing-note { position: relative; display: inline-flex; }
-.usage-pricing-note > button { display: inline-flex; padding: 2px; border-radius: 3px; }
-.usage-pricing-note > button:is(:hover, :focus-visible) { color: var(--color-ink); }
-.usage-pricing-tip {
-  position: absolute;
-  z-index: 3;
-  inset: 100% auto auto 50%;
-  translate: -50% 0;
-  width: max-content;
-  max-width: min(14rem, calc(100vw - 48px));
-  padding: 6px 9px;
-  background: var(--color-popover);
-  border: 1px solid var(--color-card-border);
-  border-radius: 8px;
-  box-shadow: 0 8px 18px #000a;
-  color: var(--color-ink);
-  visibility: hidden;
-}
-.usage-pricing-note[data-dismissed="false"]:is(:hover, :focus-within) .usage-pricing-tip { visibility: visible; }
+.usage-summary-caption { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 0 4px; }
+.usage-summary-caption > span { min-width: 0; line-height: 1.4; }
 
 .usage-overview .provider-rank { gap: 18px; }
 .usage-overview .provider-rank-line { gap: 4px; margin-bottom: 4px; font-weight: 500; line-height: 1.4; }
