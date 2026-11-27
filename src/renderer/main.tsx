@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { UsageApi } from '../shared/ipc'
-import type { UsageProviderKind } from '../shared/types'
+import { modelPriceKey, type UsageProviderKind } from '../shared/types'
 import { AccountsDialog } from './components/AccountsDialog'
 import { CostTokenView } from './components/CostTokenView'
 import { LimitsView } from './components/LimitsView'
@@ -31,7 +31,7 @@ function App() {
   const [windowError, setWindowError] = useState('')
   const [maximized, setMaximized] = useState(false)
   const maximizedRevision = useRef(0)
-  const { summary, query, pending, refreshing, failed, refresh, reprice } = useUsageData(range)
+  const { summary, query, pending, refreshing, failed, refresh, reprice, refreshProvider } = useUsageData(range)
   const limits = useLimitsData()
   const updates = useUpdates()
   const activeRefreshing = view === 'limits' ? limits.refreshing : refreshing
@@ -167,6 +167,8 @@ function App() {
       </main>
       {modal?.kind === 'model' && summary && query && (
         <UsageModelDialog model={modal.model} buckets={summary.buckets} query={query} hiddenProviders={hiddenProviderSet} metric={metric}
+          price={summary.modelPrices[modelPriceKey(modal.model.provider, modal.model.model)]}
+          onRefresh={() => refreshProvider(modal.model.provider)}
           onClose={() => setModal(null)} onPrice={() => setModal({ kind: 'prices', model: modal.model.model })} />
       )}
       {modal?.kind === 'prices' && (

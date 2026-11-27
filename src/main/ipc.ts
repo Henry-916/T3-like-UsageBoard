@@ -1,8 +1,8 @@
 import { clipboard, ipcMain } from 'electron'
 import type { BrowserWindow, IpcMainInvokeEvent } from 'electron'
 import { usageChannels } from '../shared/ipc'
-import { pricingSettingsSchema, uiPreferencesSchema, usageSummaryInputSchema } from '../shared/types'
-import type { PricePreset, UsageSummary, UsageSummaryInput } from '../shared/types'
+import { pricingSettingsSchema, providerSchema, uiPreferencesSchema, usageSummaryInputSchema } from '../shared/types'
+import type { PricePreset, UsageProviderKind, UsageSummary, UsageSummaryInput } from '../shared/types'
 import { accountChangesSchema, addManualAccountSchema, startAccountLoginSchema } from '../shared/limitsTypes'
 import type { AccountsReport } from '../shared/limitsTypes'
 import { readConfig, updateConfig } from './configStore'
@@ -15,7 +15,7 @@ import type { createTrayPanel } from './trayPanel'
 export function registerIpc(
   getWindow: () => BrowserWindow | undefined,
   userData: string,
-  getSummary: (input: UsageSummaryInput, refresh?: boolean) => Promise<UsageSummary>,
+  getSummary: (input: UsageSummaryInput, refresh?: boolean, refreshProvider?: UsageProviderKind) => Promise<UsageSummary>,
   accounts: ReturnType<typeof createAccountService>,
   limits: ReturnType<typeof createLimitsService>,
   login: ReturnType<typeof createAccountLoginManager>,
@@ -61,11 +61,13 @@ export function registerIpc(
     return window.isMaximized() || window.isFullScreen()
   })
   ipcMain.handle(usageChannels.hide, (event) => ownWindow(event).close())
-  ipcMain.handle(usageChannels.summary, (event, input: unknown, refresh: unknown) => {
+  ipcMain.handle(usageChannels.summary, (event, input: unknown, refresh: unknown, refreshProvider: unknown) => {
     ownWindow(event)
     const parsed = usageSummaryInputSchema.safeParse(input)
-    if (!parsed.success || (refresh !== undefined && typeof refresh !== 'boolean')) throw new Error('Invalid usage query')
-    return getSummary(parsed.data, refresh)
+    const provider = refreshProvider === undefined ? undefined : providerSchema.safeParse(refreshProvider)
+    if (!parsed.success || (refresh !== undefined && typeof refresh !== 'boolean') ||
+        (provider !== undefined && !provider.success)) throw new Error('Invalid usage query')
+    return getSummary(parsed.data, refresh, provider?.data)
   })
   ipcMain.handle(usageChannels.pricingSettings, async (event) => {
     ownWindow(event)

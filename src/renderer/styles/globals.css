@@ -281,17 +281,54 @@ button:disabled { cursor: default; }
 .dialog-frame { max-height: calc(100dvh - 50px); }
 .dialog-header {
   position: relative;
-  padding: 22px 60px 16px 24px;
+  z-index: 2;
+  padding: 22px 92px 16px 24px;
   flex: none;
 }
 .dialog-header h2 { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
 .dialog-header p { margin-top: 5px; color: var(--color-subtle); font-size: 12px; }
-.dialog-close { position: absolute; top: 14px; right: 14px; }
+.dialog-header-actions { position: absolute; top: 14px; right: 14px; display: flex; align-items: center; gap: 2px; }
+.dialog-close { position: static; }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 20px; }
-.dialog-body { min-height: 0; padding: 4px 24px 24px; overflow: auto; overscroll-behavior: contain; }
+.dialog-body { position: relative; z-index: 1; min-height: 0; padding: 4px 24px 24px; overflow: auto; overscroll-behavior: contain; }
 .model-dialog-body { display: flex; flex-direction: column; gap: 22px; }
 .model-dialog-body > * { flex: none; }
 .model-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.model-stats .stat { position: relative; }
+.model-price-note { position: relative; display: inline-flex; margin-inline-start: 4px; vertical-align: middle; }
+.model-price-note > button { display: inline-flex; padding: 1px; border-radius: 3px; color: var(--color-subtle); }
+.model-price-note > button:is(:hover, :focus-visible) { color: var(--color-ink); }
+.model-price-tip {
+  position: fixed;
+  z-index: 40;
+  top: 0;
+  left: 0;
+  display: none;
+  width: max-content;
+  max-width: min(22rem, calc(100vw - 96px));
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 9px;
+  border: 1px solid var(--color-card-border);
+  border-radius: 8px;
+  background: var(--color-popover);
+  box-shadow: 0 10px 24px #000b;
+  color: var(--color-ink);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: start;
+  white-space: normal;
+}
+.model-price-note:is(:hover, :focus-within) .model-price-tip { display: flex; }
+.model-price-note[data-dismissed="true"]:is(:hover, :focus-within) .model-price-tip { display: none; }
+.model-price-table { display: grid; gap: 2px; }
+.model-price-row { display: grid; grid-template-columns: auto auto; gap: 12px; }
+.model-price-row > span { color: var(--color-subtle); }
+.model-price-row > strong { text-align: end; font-weight: 500; font-variant-numeric: tabular-nums; }
+.model-price-head > span { color: var(--color-ink); font-size: 10px; }
+.model-price-head > span:last-child { text-align: end; }
+.model-price-extra { color: #c4c4ca; }
+.model-price-custom { color: var(--color-ink); }
 .model-share-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
 .dialog-footer {
   display: flex;
@@ -531,6 +568,7 @@ button:disabled { cursor: default; }
 .price-peak-tip-schedule { color: #ececf0; }
 .price-peak-tip-prices { color: #c4c4ca; font-variant-numeric: tabular-nums; }
 .price-peak-tip-off { color: var(--color-subtle); }
+
 
 .accounts-body { display: grid; gap: 12px; }
 .accounts-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }

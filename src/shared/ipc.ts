@@ -1,4 +1,4 @@
-import type { PricePreset, PricingSettings, UiPreferences, UsageSummary, UsageSummaryInput } from './types'
+import type { PricePreset, PricingSettings, UiPreferences, UsageProviderKind, UsageSummary, UsageSummaryInput } from './types'
 import type { AccountChanges, AccountLoginState, AccountsReport, AddManualAccount, ConsumeResetCreditResult, LimitsReport, StartAccountLoginInput } from './limitsTypes'
 import type { UpdateState } from './updateTypes'
 
@@ -50,7 +50,7 @@ export interface UsageApi {
   isMaximized(): Promise<boolean>
   onMaximizedChanged(listener: (maximized: boolean) => void): () => void
   hide(): Promise<void>
-  getSummary(query: UsageSummaryInput, refresh?: boolean): Promise<UsageSummary>
+  getSummary(query: UsageSummaryInput, refresh?: boolean, refreshProvider?: UsageProviderKind): Promise<UsageSummary>
   getPricingSettings(): Promise<PricingSettings>
   getPricePresets(): Promise<PricePreset[]>
   savePricingSettings(settings: PricingSettings): Promise<void>

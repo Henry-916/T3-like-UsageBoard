@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { UsageSummary, UsageSummaryInput } from '../../shared/types'
+import type { UsageProviderKind, UsageSummary, UsageSummaryInput } from '../../shared/types'
 import { makeUsageQuery, type UsageRange } from '../usagePresentation'
 
 interface UsageData {
@@ -57,7 +57,32 @@ export function useUsageData(range: UsageRange) {
 
   const refresh = useCallback(() => void read('refresh'), [read])
   const reprice = useCallback(() => void read('pricing'), [read])
+
+  /**
+   * Two-stage model refresh: one provider answers the dialog immediately, then
+   * the remaining providers sync the panel quietly without re-locking it.
+   */
+  const refreshProvider = useCallback(async (provider: UsageProviderKind) => {
+    const id = ++sequence.current
+    const query = latest.current?.range === range ? latest.current.query : makeUsageQuery(range)
+    latest.current = { range, query }
+    try {
+      const summary = await window.usageApi.getSummary(query, true, provider)
+      if (id !== sequence.current) return
+      setData({ range, summary, query, pending: false, refreshing: false, failed: false })
+    } catch {
+      if (id === sequence.current) {
+        setData((previous) => ({ ...previous, pending: false, refreshing: false, failed: true }))
+      }
+      return
+    }
+    void window.usageApi.getSummary(query, true).then((next) => {
+      if (id !== sequence.current) return
+      setData({ range, summary: next, query, pending: false, refreshing: false, failed: false })
+    }).catch(() => undefined)
+  }, [range])
+
   return { ...(data.range === range ? data : {
     range, summary: null, query: null, pending: true, refreshing: false, failed: false
-  }), refresh, reprice }
+  }), refresh, reprice, refreshProvider }
 }

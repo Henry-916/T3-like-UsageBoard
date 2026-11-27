@@ -15,7 +15,8 @@ const usageApi: UsageApi = {
     return () => ipcRenderer.removeListener(usageChannels.maximizedChanged, handler)
   },
   hide: () => ipcRenderer.invoke(usageChannels.hide),
-  getSummary: (query, refresh) => ipcRenderer.invoke(usageChannels.summary, query, refresh),
+  getSummary: (query, refresh, refreshProvider) =>
+    ipcRenderer.invoke(usageChannels.summary, query, refresh, refreshProvider),
   getPricingSettings: () => ipcRenderer.invoke(usageChannels.pricingSettings),
   getPricePresets: () => ipcRenderer.invoke(usageChannels.pricePresets),
   savePricingSettings: (settings) => ipcRenderer.invoke(usageChannels.savePricing, settings),
