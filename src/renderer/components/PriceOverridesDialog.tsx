@@ -1,6 +1,6 @@
 import { ChevronDown, Clock, Plus, X } from 'lucide-react'
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { describePeakSchedules, timeScheduleMultipliers } from '../../shared/pricingMultipliers'
+import { describePeakSchedules, peakScheduleHeading, timeScheduleMultipliers } from '../../shared/pricingMultipliers'
 import type { PriceOverrides, PricePreset, PricingSettings, RateMultiplier } from '../../shared/types'
 import { UsageDialog } from './UsageDialog'
 
@@ -39,10 +39,18 @@ function peakPriceLine(preset: PricePreset, factor: number): string {
     ? [`${label} ${formatUsd(value * factor)}`] : []).join(' · ')
 }
 
-function presetPeakText(preset: PricePreset, timeZone: string): string {
-  return describePeakSchedules(preset.multipliers, timeZone)
-    .map(({ schedule, factor }) => `${schedule} ×${factor}\n${peakPriceLine(preset, factor)}`)
-    .join('\n')
+type PeakTipEntry = {
+  heading: string
+  schedule: string
+  prices: string
+}
+
+function presetPeakEntries(preset: PricePreset, timeZone: string): PeakTipEntry[] {
+  return describePeakSchedules(preset.multipliers, timeZone).map(({ schedule, factor }) => ({
+    heading: peakScheduleHeading(factor),
+    schedule,
+    prices: peakPriceLine(preset, factor)
+  }))
 }
 
 function rowPeakPriceLine(row: PriceRow, factor: number): string {
@@ -374,8 +382,10 @@ function placePresetMenu(panel: HTMLDivElement, anchor: HTMLElement) {
 }
 
 type PresetTip = {
-  text: string
+  key: string
   kind: 'name' | 'peak'
+  text?: string
+  entries?: PeakTipEntry[]
   rect: { left: number; top: number; bottom: number }
   below: boolean
   left?: number
@@ -384,8 +394,7 @@ type PresetTip = {
 
 type PeakTip = {
   rowId: number
-  entries: { schedule: string; factor: number; prices: string }[]
-  enabled: boolean
+  entries: PeakTipEntry[]
   rect: { left: number; top: number; bottom: number }
   below: boolean
   left?: number
@@ -506,7 +515,7 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
     const below = presetTip.rect.top - tipHeight - 4 < 8
     const top = Math.round(below ? presetTip.rect.bottom + 4 : presetTip.rect.top - tipHeight - 4)
     if (presetTip.left !== left || presetTip.top !== top || presetTip.below !== below) {
-      setPresetTip((current) => current?.text === presetTip.text && current.kind === presetTip.kind
+      setPresetTip((current) => current?.key === presetTip.key && current.kind === presetTip.kind
         ? { ...current, left, top, below } : current)
     }
   }, [presetTip])
@@ -585,15 +594,14 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
     rect: { left: number; top: number; bottom: number }
   ): PeakTip | null {
     const entries = describePeakSchedules(row.multipliers, localTimeZone()).map(({ schedule, factor }) => ({
+      heading: peakScheduleHeading(factor),
       schedule,
-      factor,
       prices: rowPeakPriceLine(row, factor),
     }))
     if (!entries.length) return null
     return {
       rowId: row.id,
       entries,
-      enabled: row.multipliersEnabled !== false,
       rect,
       below: false,
     }
@@ -786,7 +794,7 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
                       ...(preset.cacheReadCostPerMillionTokens === undefined ? [] : [`读 ${formatPresetRate(preset.cacheReadCostPerMillionTokens)}`]),
                       ...(preset.cacheWriteCostPerMillionTokens === undefined ? [] : [`创 ${formatPresetRate(preset.cacheWriteCostPerMillionTokens)}`])
                     ].join(' · ')
-                    const peak = presetPeakText(preset, localTimeZone())
+                    const peakEntries = presetPeakEntries(preset, localTimeZone())
                     return (
                       <button key={preset.id} type="button" role="option" aria-selected={index === activePreset}
                         tabIndex={-1} ref={index === activePreset ? activePresetOption : undefined}
@@ -801,6 +809,7 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
                             return
                           }
                           setPresetTip({
+                            key: preset.id,
                             text: preset.modelId,
                             kind: 'name',
                             rect: event.currentTarget.getBoundingClientRect(),
@@ -813,13 +822,14 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
                           <strong>{preset.modelId}</strong>
                         </span>
                         <span className="preset-option-rates">
-                          {peak && (
+                          {peakEntries.length > 0 && (
                             <span className="preset-peak-mark"
                               onPointerEnter={(event) => {
                                 event.stopPropagation()
                                 setActivePreset(index)
                                 setPresetTip({
-                                  text: peak,
+                                  key: preset.id,
+                                  entries: peakEntries,
                                   kind: 'peak',
                                   rect: event.currentTarget.getBoundingClientRect(),
                                   below: false
@@ -844,7 +854,13 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
                       top: presetTip.top ?? Math.max(8, presetTip.rect.top),
                       visibility: presetTip.left === undefined ? 'hidden' : 'visible'
                     }}>
-                    {presetTip.text}
+                    {presetTip.kind === 'peak' ? presetTip.entries?.map((entry, index) => (
+                      <span className="price-peak-tip-entry" key={index}>
+                        <span className="price-peak-tip-heading">{entry.heading}</span>
+                        {entry.prices && <span className="price-peak-tip-prices">{entry.prices}</span>}
+                        <span className="price-peak-tip-schedule">{entry.schedule}</span>
+                      </span>
+                    )) : presetTip.text}
                   </span>
                 )}
               </div>
@@ -858,11 +874,11 @@ export function PriceOverridesDialog({ initialModel, models, onClose, onSaved }:
                   }}>
                   {peakTip.entries.map((entry, index) => (
                     <span className="price-peak-tip-entry" key={index}>
-                      <span className="price-peak-tip-schedule">{entry.schedule} ×{entry.factor}</span>
+                      <span className="price-peak-tip-heading">{entry.heading}</span>
                       {entry.prices && <span className="price-peak-tip-prices">{entry.prices}</span>}
+                      <span className="price-peak-tip-schedule">{entry.schedule}</span>
                     </span>
                   ))}
-                  {!peakTip.enabled && <span className="price-peak-tip-off">已关闭</span>}
                 </span>
               )}
               <datalist id={listId}>

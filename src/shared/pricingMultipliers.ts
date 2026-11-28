@@ -28,6 +28,11 @@ function formatClock(minutes: number): string {
   return `${String(Math.floor(bounded / 60)).padStart(2, '0')}:${String(bounded % 60).padStart(2, '0')}`
 }
 
+function formatDisplayClock(minutes: number): string {
+  const bounded = ((Math.round(minutes) % 1440) + 1440) % 1440
+  return `${Math.floor(bounded / 60)}:${String(bounded % 60).padStart(2, '0')}`
+}
+
 function utcDayAt(timestampMs: number): UtcDay {
   return DAY_ORDER[(new Date(timestampMs).getUTCDay() + 6) % 7]
 }
@@ -386,6 +391,7 @@ function collectLocalIntervals(
 ): Map<number, LocalInterval[]> {
   const groups = new Map<number, LocalInterval[]>()
   for (const rule of rules) {
+    if (rule.factor === 1) continue
     const shape = timeShape(rule.when)
     if (!shape) continue
     const windows = shape.windows ?? [{ days: shape.days, start: 0, end: 1440 }]
@@ -475,23 +481,31 @@ function dayLabel(days: readonly UtcDay[] | null): string {
 function timeLabel(interval: LocalInterval): string {
   return interval.fullDay || interval.start === interval.end
     ? '全天'
-    : `${formatClock(interval.start)}–${formatClock(interval.end)}`
+    : `${formatDisplayClock(interval.start)}–${formatDisplayClock(interval.end)}`
 }
 
 export interface PeakSchedule {
-  /** Local time description such as `工作日 09:00–12:00`, without the factor. */
+  /** Local time description such as `工作日 9:00–12:00`, without the factor. */
   schedule: string
   factor: number
+}
+
+export function peakPeriodLabel(factor: number): string {
+  return factor < 1 ? '谷期' : '峰期'
+}
+
+export function peakScheduleHeading(factor: number): string {
+  return `${factor < 1 ? '低谷期' : '高峰期'}（${Number(factor.toPrecision(6))}x）`
 }
 
 /** Only rules that resolve to a local clock schedule are peak rules. */
 export function timeScheduleMultipliers(
   rules: readonly RateMultiplier[] | undefined
 ): RateMultiplier[] {
-  return rules?.filter((rule) => timeShape(rule.when) !== null) ?? []
+  return rules?.filter((rule) => rule.factor !== 1 && timeShape(rule.when) !== null) ?? []
 }
 
-/** One entry per peak schedule group, carrying that group's own factor. */
+/** One entry per distinct factor, carrying its merged local clock schedule. */
 export function describePeakSchedules(
   rules: readonly RateMultiplier[] | undefined,
   timeZone: string,
@@ -517,8 +531,8 @@ export function describePeakSchedules(
       add(factor, mode.days, mergeLocalIntervals(intervals))
       continue
     }
-    // Mixed weekday sets cannot be represented as one local schedule; keep
-    // each exact day set separate instead of inventing coverage.
+    // Mixed weekday sets cannot be represented as one day label; keep
+    // each exact day set separate and join them under the same factor.
     const byDays = new Map<string, LocalInterval[]>()
     for (const interval of intervals) {
       const key = interval.days === null ? '' : interval.days.join(',')
@@ -530,8 +544,15 @@ export function describePeakSchedules(
       add(factor, list[0]?.days ?? null, mergeLocalIntervals(list))
     }
   }
-  return [...groups.values()].map(({ factor, label, times }) => ({
-    schedule: `${label ? `${label} ` : ''}${times.join('、')}`,
+  const byFactor = new Map<number, string[]>()
+  for (const { factor, label, times } of groups.values()) {
+    const part = `${label ? `${label} ` : ''}${times.join('、')}`
+    const list = byFactor.get(factor) ?? []
+    if (!list.includes(part)) list.push(part)
+    byFactor.set(factor, list)
+  }
+  return [...byFactor.entries()].map(([factor, parts]) => ({
+    schedule: parts.join('；'),
     factor,
   }))
 }
@@ -543,5 +564,5 @@ export function describeMultiplierRules(
 ): string | null {
   const schedules = describePeakSchedules(rules, timeZone, referenceMs)
   if (!schedules.length) return null
-  return schedules.map(({ schedule, factor }) => `${schedule} ×${factor}`).join('；')
+  return schedules.map(({ schedule, factor }) => `${peakScheduleHeading(factor)}：${schedule}`).join('；')
 }

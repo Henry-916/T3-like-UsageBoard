@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   describeMultiplierRules, describePeakSchedules, multiplierFactor, normalizeMultipliers,
-  timeScheduleMultipliers, timeZoneOffsetMinutes
+  peakScheduleHeading, timeScheduleMultipliers, timeZoneOffsetMinutes
 } from '../src/shared/pricingMultipliers'
 
 const deepseekRules = normalizeMultipliers([{
@@ -41,12 +41,14 @@ describe('pricing multipliers', () => {
     expect(alibabaRules[0]?.factor).toBe(0.5)
   })
 
-  it('describes UTC rules in local time', () => {
+  it('describes UTC rules in local time with peak/off-peak multiplier headings', () => {
     expect(timeZoneOffsetMinutes('Asia/Shanghai', reference)).toBe(480)
+    expect(peakScheduleHeading(2)).toBe('高峰期（2x）')
+    expect(peakScheduleHeading(0.5)).toBe('低谷期（0.5x）')
     expect(describeMultiplierRules(deepseekRules, 'Asia/Shanghai', reference))
-      .toBe('工作日 09:00–12:00、14:00–18:00 ×2')
+      .toBe('高峰期（2x）：工作日 9:00–12:00、14:00–18:00')
     expect(describeMultiplierRules(alibabaRules, 'Asia/Shanghai', reference))
-      .toBe('22:00–08:00 ×0.5')
+      .toBe('低谷期（0.5x）：22:00–8:00')
   })
 
   it('drops any branch carrying an unevaluable condition instead of applying it worldwide', () => {
@@ -87,7 +89,7 @@ describe('pricing multipliers', () => {
       { when: { utc_hours: { gte: '14:00' } }, factor: 0.5 }
     ])
     expect(describePeakSchedules(mixed, 'Asia/Shanghai', reference))
-      .toEqual([{ schedule: '22:00–08:00', factor: 0.5 }])
+      .toEqual([{ schedule: '22:00–8:00', factor: 0.5 }])
     expect(timeScheduleMultipliers(normalizeMultipliers([
       { when: { service_tier: { equals: 'fast' } }, factor: 2 },
       { when: { date: { gte: '2026-11-01' } }, factor: 1.1 }
@@ -97,17 +99,31 @@ describe('pricing multipliers', () => {
     ]), 'Asia/Shanghai', reference)).toEqual([])
   })
 
-  it('keeps each local peak group on its own factor', () => {
+  it('keeps each local peak group on its own factor and merges mixed weekday sets per factor', () => {
     const rules = normalizeMultipliers([
       { when: { utc_hours: { gte: '01:00', lt: '04:00' } }, factor: 2 },
       { when: { utc_hours: { gte: '14:00' } }, factor: 0.5 }
     ])
     expect(describePeakSchedules(rules, 'Asia/Shanghai', reference)).toEqual([
-      { schedule: '09:00–12:00', factor: 2 },
-      { schedule: '22:00–08:00', factor: 0.5 }
+      { schedule: '9:00–12:00', factor: 2 },
+      { schedule: '22:00–8:00', factor: 0.5 }
     ])
     expect(describeMultiplierRules(rules, 'Asia/Shanghai', reference))
-      .toBe('09:00–12:00 ×2；22:00–08:00 ×0.5')
+      .toBe('高峰期（2x）：9:00–12:00；低谷期（0.5x）：22:00–8:00')
+
+    const weekendRules = normalizeMultipliers([{
+      when: {
+        any: [
+          { utc_days: { in: ['fri', 'sat'] } },
+          { all: [{ utc_days: { in: ['thu'] } }, { utc_hours: { gte: '23:00' } }] },
+          { all: [{ utc_days: { in: ['sun'] } }, { utc_hours: { lt: '23:00' } }] }
+        ]
+      },
+      factor: 0.5
+    }])
+    const weekend = describePeakSchedules(weekendRules, 'Asia/Shanghai', reference)
+    expect(weekend).toHaveLength(1)
+    expect(weekend[0]?.factor).toBe(0.5)
   })
 
   it('matches fast turns against either the fast or priority service tier', () => {

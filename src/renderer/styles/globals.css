@@ -305,7 +305,7 @@ button:disabled { cursor: default; }
   left: 0;
   display: none;
   width: max-content;
-  max-width: min(22rem, calc(100vw - 96px));
+  max-width: min(24rem, calc(100vw - 32px));
   flex-direction: column;
   gap: 4px;
   padding: 7px 9px;
@@ -321,12 +321,20 @@ button:disabled { cursor: default; }
 }
 .model-price-note:is(:hover, :focus-within) .model-price-tip { display: flex; }
 .model-price-note[data-dismissed="true"]:is(:hover, :focus-within) .model-price-tip { display: none; }
-.model-price-table { display: grid; gap: 2px; }
-.model-price-row { display: grid; grid-template-columns: auto auto; gap: 12px; }
+.model-price-table {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 18px;
+  row-gap: 2px;
+  align-items: baseline;
+}
+.model-price-table-peak { grid-template-columns: minmax(0, 1fr) auto auto; }
+.model-price-row { display: contents; }
+.model-price-row > * { white-space: nowrap; text-align: start; }
 .model-price-row > span { color: var(--color-subtle); }
-.model-price-row > strong { text-align: end; font-weight: 500; font-variant-numeric: tabular-nums; }
+.model-price-row > strong { font-weight: 500; font-variant-numeric: tabular-nums; }
 .model-price-head > span { color: var(--color-ink); font-size: 10px; }
-.model-price-head > span:last-child { text-align: end; }
+.model-price-table + .model-price-extra { margin-top: 2px; padding-top: 4px; border-top: 1px solid var(--color-row-divider); }
 .model-price-extra { color: #c4c4ca; }
 .model-price-custom { color: var(--color-ink); }
 .model-share-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
@@ -492,7 +500,14 @@ button:disabled { cursor: default; }
   white-space: normal;
   pointer-events: none;
 }
-.preset-picker-tip[data-kind="peak"] { white-space: pre-line; }
+.preset-picker-tip[data-kind="peak"] {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  line-height: 1.5;
+}
 .price-field {
   width: 100%;
   height: 30px;
@@ -565,9 +580,9 @@ button:disabled { cursor: default; }
   pointer-events: none;
 }
 .price-peak-tip-entry { display: flex; flex-direction: column; gap: 1px; }
-.price-peak-tip-schedule { color: #ececf0; }
-.price-peak-tip-prices { color: #c4c4ca; font-variant-numeric: tabular-nums; }
-.price-peak-tip-off { color: var(--color-subtle); }
+.price-peak-tip-heading { color: var(--color-ink); font-weight: 500; }
+.price-peak-tip-prices { color: #dedee3; font-variant-numeric: tabular-nums; }
+.price-peak-tip-schedule { color: #a8a8b0; }
 
 .release-notes-body { padding-top: 4px; }
 .release-notes-markdown {

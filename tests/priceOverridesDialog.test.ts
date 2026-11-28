@@ -75,10 +75,14 @@ type TestProps = {
   onKeyDown?: (event: { key: string; preventDefault: () => void }) => void
   onScroll?: () => void
   onPointerLeave?: () => void
-  onPointerEnter?: (event: { currentTarget: {
-    getBoundingClientRect: () => { left: number; right: number; top: number; bottom: number }
-    querySelector: (selector: string) => { scrollWidth: number; clientWidth: number } | null
-  } }) => void
+  onPointerEnter?: (event: {
+    stopPropagation?: () => void
+    target?: unknown
+    currentTarget: {
+      getBoundingClientRect: () => { left: number; right?: number; top: number; bottom: number }
+      querySelector?: (selector: string) => { scrollWidth: number; clientWidth: number } | null
+    }
+  }) => void
 }
 
 function elements(node: ReactNode): ReactElement<TestProps>[] {
@@ -562,6 +566,16 @@ describe('PriceOverridesDialog preset picker', () => {
     const line = nodes.find(({ props }) => props.className === 'price-model-line')!
     expect(elements(line.props.children)[0]!.props.children).toBe('custom/deepseek')
 
+    // Disabled switch relies on pill dimming alone and does not append `已关闭` inside the tooltip.
+    rowSwitch!.props.onPointerEnter!({
+      currentTarget: { getBoundingClientRect: () => ({ left: 10, top: 100, bottom: 120 }) }
+    })
+    nodes = render()
+    const offTipLines = elements(nodes.find(({ props }) => props.className === 'price-peak-tip')!.props.children)
+      .map(({ props }) => props.children).filter((child): child is string => typeof child === 'string')
+    expect(offTipLines[0]).toBe('低谷期（0.5x）')
+    expect(offTipLines).not.toContain('已关闭')
+
     // Toggling back on is a real change the form will save.
     rowSwitch!.props.onClick!({
       currentTarget: { getBoundingClientRect: () => ({ left: 10, top: 10, bottom: 30 }) }
@@ -569,6 +583,20 @@ describe('PriceOverridesDialog preset picker', () => {
     nodes = render()
     expect(nodes.find(({ props }) => props.role === 'switch')?.props['aria-checked']).toBe(true)
     expect(nodes.find(({ type, props }) => type === 'button' && props.className?.includes('primary-action'))?.props.disabled).toBe(false)
+
+    // Editing custom rates recalculates the row pill tooltip with prices placed above schedule.
+    nodes.find(({ props }) => props['aria-label'] === 'custom/deepseek 输入单价')!
+      .props.onChange!({ target: { value: '10' } })
+    nodes = render()
+    nodes.find(({ props }) => props.role === 'switch')!.props.onPointerEnter!({
+      currentTarget: { getBoundingClientRect: () => ({ left: 10, top: 100, bottom: 120 }) }
+    })
+    nodes = render()
+    const rowTipLines = elements(nodes.find(({ props }) => props.className === 'price-peak-tip')!.props.children)
+      .map(({ props }) => props.children).filter((child): child is string => typeof child === 'string')
+    expect(rowTipLines[0]).toBe('低谷期（0.5x）')
+    expect(rowTipLines[1]).toBe('入 $5 · 出 $1')
+    expect(rowTipLines).not.toContain('已关闭')
 
     openPicker(nodes)
     nodes = render()
@@ -582,6 +610,17 @@ describe('PriceOverridesDialog preset picker', () => {
     expect(elements(parts[0]!.props.children)[0]!.props.size).toBe(12)
     expect(parts.some(({ props }) =>
       typeof props.children === 'string' && props.children.includes('入 $3'))).toBe(true)
+
+    parts[0]!.props.onPointerEnter!({
+      stopPropagation: vi.fn(),
+      currentTarget: { getBoundingClientRect: () => ({ left: 320, top: 140, bottom: 156 }) }
+    })
+    nodes = render()
+    const presetTipLines = elements(nodes.find(({ props }) => props.className === 'preset-picker-tip')!.props.children)
+      .map(({ props }) => props.children).filter((child): child is string => typeof child === 'string')
+    expect(presetTipLines[0]).toBe('低谷期（0.5x）')
+    expect(presetTipLines[1]).toBe('入 $1.5 · 出 $2')
+    expect(presetTipLines[2]).toBeTruthy()
   })
 
   it('does not mark service-tier or date presets as peak or show a row switch', async () => {

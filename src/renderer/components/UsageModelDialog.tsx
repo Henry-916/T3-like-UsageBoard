@@ -1,7 +1,7 @@
 import { CircleHelp, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { UsageBucket, UsageModelPrice, UsageProviderKind, UsageSummaryInput } from '../../shared/types'
-import { describePeakSchedules } from '../../shared/pricingMultipliers'
+import { describePeakSchedules, peakPeriodLabel } from '../../shared/pricingMultipliers'
 import { formatPercent, formatTokens, formatUsd } from '../../shared/usageFormat'
 import { formatUsageCost, providerInfo, trendTitle, usageFigures, usageSegments, visibleUsage, type UsageMetric, type UsageModel } from '../usagePresentation'
 import { ProviderMark } from './ProviderMark'
@@ -131,6 +131,7 @@ function ModelPriceNote({ price, timeZone }: { price: UsageModelPrice; timeZone:
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null)
   const schedules = describePeakSchedules(price.multipliers, timeZone)
+  const singleSchedule = schedules.length === 1 ? schedules[0] : undefined
 
   const place = useCallback(() => {
     const anchor = note.current
@@ -192,13 +193,33 @@ function ModelPriceNote({ price, timeZone }: { price: UsageModelPrice; timeZone:
           top: position?.top ?? 0,
           visibility: position ? 'visible' : 'hidden'
         }}>
-        <span className="model-price-table" role="table" aria-label="生效单价">
+        <span className={`model-price-table${singleSchedule ? ' model-price-table-peak' : ''}`}
+          role="table" aria-label="生效单价">
           <span className="model-price-row model-price-head" role="row">
             <span role="columnheader">类型</span>
-            <span role="columnheader">价格（美元/M）</span>
+            {singleSchedule ? (
+              <>
+                <span role="columnheader">峰期（美元/M）</span>
+                <span role="columnheader">谷期（美元/M）</span>
+              </>
+            ) : (
+              <span role="columnheader">价格（美元/M）</span>
+            )}
           </span>
           {priceRows.map(([label, key]) => {
             const value = price[key]
+            if (singleSchedule) {
+              const { factor } = singleSchedule
+              const peak = value === undefined ? undefined : (factor < 1 ? value : value * factor)
+              const offPeak = value === undefined ? undefined : (factor < 1 ? value * factor : value)
+              return (
+                <span className="model-price-row" role="row" key={key}>
+                  <span role="cell">{label}</span>
+                  <strong role="cell">{peak === undefined ? '—' : priceText(peak)}</strong>
+                  <strong role="cell">{offPeak === undefined ? '—' : priceText(offPeak)}</strong>
+                </span>
+              )
+            }
             return (
               <span className="model-price-row" role="row" key={key}>
                 <span role="cell">{label}</span>
@@ -215,17 +236,15 @@ function ModelPriceNote({ price, timeZone }: { price: UsageModelPrice; timeZone:
             {tier.cacheWriteCostPerMillionTokens === undefined ? '' : ` · 缓存创建 ${priceText(tier.cacheWriteCostPerMillionTokens)}`}
           </span>
         ))}
-        {schedules.length > 0 && (
+        {singleSchedule ? (
           <span className="model-price-extra">
-            峰谷计价：{schedules.map(({ schedule, factor }) => `${schedule} ×${factor}`).join('；')}
+            {peakPeriodLabel(singleSchedule.factor)}：{singleSchedule.schedule}
           </span>
-        )}
-        {schedules.map(({ schedule, factor }) => {
+        ) : schedules.map(({ schedule, factor }) => {
           const prices = peakPriceParts(price, factor)
-          if (!prices.length) return null
           return (
             <span className="model-price-extra" key={`${schedule}:${factor}`}>
-              峰谷单价{schedules.length > 1 ? `（${schedule} ×${factor}）` : ''}：{prices.join(' · ')}
+              {peakPeriodLabel(factor)}：{schedule}{prices.length ? `（${prices.join(' · ')}）` : ''}
             </span>
           )
         })}
